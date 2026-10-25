@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>병원 기초정보 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
+<script src="shared.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<script>
+const page = mountShell({
+  active: 'hospital', title: '병원 기초정보',
+  footer: '시안 — 입원 실적과 월별 추이는 예시값입니다. 추가·수정한 프리셋과 매출 항목은 이 브라우저에 저장되어 시뮬레이터 시안에 나타납니다.',
+});
+
+const TABS = [
+  { key: 'info', label: '기본정보·실적', icon: 'building-2', help: '병원 시스템에서 받는 정보입니다. 읽기만 할 수 있습니다.' },
+  { key: 'items', label: '매출 항목', icon: 'list-tree', help: '병원 매출을 이루는 항목과 계산 방식을 정합니다.' },
+  { key: 'profile', label: '재무 상수', icon: 'landmark', help: '인건비·세율·감가상각·WACC처럼 모든 시나리오가 함께 쓰는 값입니다.' },
+  { key: 'params', label: '환자 구분 계수', icon: 'users', help: '외래·입원·건강검진 인원을 계산에 쓸 때 곱하는 비율입니다.' },
+  { key: 'presets', label: '시나리오 프리셋', icon: 'sliders-horizontal', help: '시나리오를 만들 때 고르는 시작 값 묶음입니다.' },
+  { key: 'assumptions', label: '가정', icon: 'file-check', help: '입력값의 근거와 검증 여부입니다.' },
+];
+
+page.innerHTML = `
+  <section class="card">
+    <div class="flex flex-col gap-4 p-6 lg:flex-row lg:items-end lg:justify-between">
+      <div class="space-y-1"><div class="text-xs text-muted-foreground">병원</div><div id="hospitalName" class="text-lg font-semibold"></div></div>
+      <dl id="hospitalSummary" class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4"></dl>
+    </div>
+  </section>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2"><div class="overflow-x-auto"><div class="tabs-list" role="tablist" id="tabList"></div></div><p id="tabHelp" class="text-sm text-muted-foreground"></p></div>
+    <div id="tabBody" class="space-y-6"></div>
+  </div>`;
+
+const HOSPITALS = loadHospitals();
+const state = { hid: 'vista', tab: TABS.some(t => t.key === location.hash.slice(1)) ? location.hash.slice(1) : 'info', preset: null, profileDirty: false };
+const hosp = () => HOSPITALS.find(h => h.id === state.hid);
+const scenarioCount = key => (SCENARIO_SEED[state.hid] || []).filter(s => s.preset === key).length;
+
+const SOURCE = {
+  ext: '<span class="badge badge-secondary"><i data-lucide="lock" class="size-3"></i>병원 시스템 제공 · 읽기 전용</span>',
+  own: '<span class="badge badge-outline"><i data-lucide="pencil" class="size-3"></i>이 화면에서 관리</span>',
+};
+const card = (title, desc, body, right = '', help = '') => `<section class="card"><div class="card-header flex-row flex-wrap items-start justify-between gap-3"><div class="space-y-1.5"><h2 class="card-title flex items-center gap-1.5">${title}${tip(help)}</h2>${desc ? `<p class="card-desc">${desc}</p>` : ''}</div><div class="flex flex-wrap items-center gap-2">${right}</div></div><div class="card-content">${body}</div></section>`;
+
+/* 월별 실적 — 집계 기간의 달 수만큼 만든다 (예시값) */
+function monthly(v, seed) {
+  const avg = v.count / v.months;
+  return Array.from({ length: v.months }, (_, i) => Math.round(avg * (1 + 0.12 * Math.sin((i + seed) * 1.3) + 0.04 * Math.cos(i * 2.1))));
+}
+
+/* ---------- 상단 ---------- */
+function renderTop() {
+  const h = hosp();
+  document.getElementById('hospitalName').textContent = h.name;
+  const dd = (k, v, help = '') => `<div><dt class="flex items-center gap-1 text-xs text-muted-foreground">${k}${tip(help, k)}</dt><dd class="font-medium">${v}</dd></div>`;
+  document.getElementById('hospitalSummary').innerHTML =
+    dd('병원 코드', h.code) + dd('통화', h.currency === h.report ? h.currency : `${h.currency} → ${h.report}`, '병원 통화로 받은 금액을 보고 통화로 바꿔 보여 줍니다.') +
+    dd('기준연도', h.baseYear, '실적이 속한 연도입니다. 시뮬레이션은 다음 해를 Y1로 5년을 계산합니다.') + dd('실적 수신', h.receivedAt, '병원 시스템에서 실적을 마지막으로 받은 날짜입니다.');
+  document.getElementById('tabList').innerHTML = TABS.map(t => `<button type="button" class="tabs-trigger" role="tab" data-tab="${t.key}" data-state="${t.key === state.tab ? 'active' : 'inactive'}"><i data-lucide="${t.icon}" class="size-4"></i>${t.label}</button>`).join('');
+  document.getElementById('tabHelp').textContent = TABS.find(t => t.key === state.tab).help;
+}
+
+/* ---------- 기본정보·실적 ---------- */
+function infoTab() {
+  const h = hosp();
+  const dl = (k, v, help = '') => `<div class="space-y-1"><dt class="flex items-center gap-1 text-xs text-muted-foreground">${k}${tip(help, k)}</dt><dd class="text-sm">${v}</dd></div>`;
+  const basic = card('병원', '병원 시스템에서 받은 기본 정보입니다. 이 화면에서 수정할 수 없습니다.', `
+    <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+      ${dl('병원명', esc(h.name))}${dl('병원 코드', h.code)}${dl('국가', h.country)}${dl('기준연도', `${h.baseYear} (시뮬레이션 Y1 = ${h.baseYear + 1})`)}
+      ${dl('병원 통화', h.currency)}${dl('보고 통화', `${h.report} <span class="text-xs text-muted-foreground">${h.fx}</span>`)}
+      ${dl('운영 거점', `<span class="flex flex-wrap items-center gap-1.5">${h.locations.map(l => `<span class="badge badge-outline">${l}</span>`).join('')}${h.locations.length > 1 ? '<span class="text-xs text-muted-foreground">한 병원으로 합산</span>' : ''}</span>`)}
+          </dl>`, SOURCE.ext);
+
+  const rows = h.volumes.map((v, i) => {
+    const label = VOLUME_TYPES.find(t => t.key === v.key).label;
+    return `<tr class="border-b last:border-0">
+      <td class="td font-medium">${label}</td>
+      <td class="td num">${F.int(v.count)}</td>
+      <td class="td tabular-nums">${periodText(v)}</td>
+      <td class="td num">${v.months}개월</td>
+      <td class="td num">${v.months < 12 ? `<span class="inline-flex items-center gap-1.5"><span class="badge badge-warning">연환산</span>${F.int(annualized(v))}</span>` : F.int(v.count)}</td>
+      <td class="td">${sparkBars(monthly(v, i + 1))}</td>
+      <td class="td text-xs text-muted-foreground">${v.note ? esc(v.note) : ''}</td>
+    </tr>`;
+  }).join('');
+  const volumes = card('환자 실적', `외래·입원·건강검진으로 나눠 받은 ${h.baseYear} 실적입니다. 집계 기간이 12개월보다 짧으면 연환산 인원을 시뮬레이터에 넘깁니다.`, `
+    <div class="overflow-x-auto"><table class="w-full min-w-[760px] text-sm">
+      <thead><tr class="border-b"><th class="th">구분</th><th class="th num">실적 인원</th><th class="th"><span class="inline-flex items-center gap-1">집계 기간${term('집계 기간')}</span></th><th class="th num">개월</th><th class="th num"><span class="inline-flex items-center gap-1">시뮬레이터 반영 인원${term('연환산')}</span></th><th class="th">월별 추이</th><th class="th">비고</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><i data-lucide="info" class="size-3.5"></i>병원 시스템 ${h.receivedAt} 수신${h.locations.length > 1 ? ` · ${h.locations.join('·')} 거점 실적 합산` : ''}</p>`, SOURCE.ext);
+  return basic + volumes;
+}
+
+/* ---------- 매출 항목 ---------- */
+function itemsTab() {
+  const h = hosp(), list = h.revenueItems;
+  const rows = list.map((it, i) => `<tr class="border-b last:border-0 ${it.enabled ? '' : 'text-muted-foreground'}">
+    <td class="td text-muted-foreground tabular-nums">${i + 1}</td>
+    <td class="td font-medium">${esc(it.name)}${it.custom ? ' <span class="badge badge-warning ms-1">추가</span>' : ''}</td>
+    <td class="td">${segBadge(it.segment)}</td>
+    <td class="td">${CALC_TYPES[it.type].label}</td>
+    <td class="td">${BASE_LABEL[it.base] || '-'}</td>
+    <td class="td max-w-[260px] truncate text-xs text-muted-foreground" title="${esc(it.fields.map(f => f.label).join(', '))}">${it.fields.map(f => f.label).join(', ')}</td>
+    <td class="td">${switchHtml(it.enabled, `data-item-toggle="${it.key}" aria-label="${esc(it.name)} 사용"`)}</td>
+    <td class="td text-end"><div class="inline-flex gap-1">
+      <button type="button" class="btn btn-ghost btn-icon" data-item-move="${i}:-1" ${i === 0 ? 'disabled' : ''} aria-label="위로"><i data-lucide="arrow-up"></i></button>
+      <button type="button" class="btn btn-ghost btn-icon" data-item-move="${i}:1" ${i === list.length - 1 ? 'disabled' : ''} aria-label="아래로"><i data-lucide="arrow-down"></i></button>
+      <button type="button" class="btn btn-ghost btn-icon" data-item-edit="${it.key}" aria-label="편집"><i data-lucide="pencil"></i></button>
+      ${it.custom ? `<button type="button" class="btn btn-ghost btn-icon text-destructive" data-item-delete="${it.key}" aria-label="삭제"><i data-lucide="trash-2"></i></button>` : ''}
+    </div></td></tr>`).join('');
+  const table = card('매출 항목', `${esc(h.name)}의 매출을 이루는 항목입니다. 사용하는 항목만 시뮬레이터 입력판과 결과에 나타납니다.`, `
+    <div class="overflow-x-auto"><table class="w-full min-w-[860px] text-sm">
+      <thead><tr class="border-b"><th class="th w-10">순서</th><th class="th">항목명</th><th class="th"><span class="inline-flex items-center gap-1">부문${term('부문')}</span></th><th class="th"><span class="inline-flex items-center gap-1">산출 방식${term('산출 방식')}</span></th><th class="th"><span class="inline-flex items-center gap-1">기반 인원${term('기반 인원')}</span></th><th class="th">시뮬레이터 입력</th><th class="th"><span class="inline-flex items-center gap-1">사용${tip('끄면 시뮬레이터 입력판과 결과에서 이 항목이 빠집니다. 값은 지워지지 않습니다.')}</span></th><th class="th text-end">관리</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`, `${SOURCE.own}<button type="button" class="btn btn-default btn-sm" id="addItem"><i data-lucide="plus"></i>매출 항목 추가</button>`);
+  const types = card('산출 방식', '매출 항목을 추가할 때 고르는 계산 방식입니다. 방식에 따라 시뮬레이터 입력 항목이 정해집니다.', `
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">${Object.entries(CALC_TYPES).map(([k, t]) => `<div class="space-y-2 rounded-lg border p-4">
+      <div class="font-medium">${t.label}</div><code class="block rounded bg-muted px-2 py-1 text-xs">${t.formula}</code>
+      <div class="flex flex-wrap gap-1">${t.fields.map(f => `<span class="badge badge-outline">${f.label}</span>`).join('')}</div></div>`).join('')}</div>`);
+  return table + types;
+}
+
+function itemModal(key) {
+  const h = hosp(), it = key ? h.revenueItems.find(x => x.key === key) : null;
+  const typeLocked = it && !it.custom;
+  openModal({
+    title: it ? '매출 항목 편집' : '매출 항목 추가', size: 'max-w-xl',
+    desc: typeLocked ? '계산식이 연결된 기본 항목은 이름·부문·사용 여부만 바꿀 수 있습니다.' : '',
+    body: `<form class="space-y-4" onsubmit="return false">
+      <label class="block space-y-1.5"><span class="label">항목명 <span class="text-destructive">*</span></span><input id="imName" class="input" maxlength="30" value="${esc(it?.name ?? '')}" placeholder="예: 건강검진 패키지 업셀"/></label>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block space-y-1.5"><span class="label">부문</span><select id="imSeg" class="select">${['Medical', 'Commerce'].map(s => `<option ${it?.segment === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+        <label class="block space-y-1.5"><span class="label">기반 인원</span><select id="imBase" class="select" ${typeLocked ? 'disabled' : ''}>${Object.entries(BASE_LABEL).map(([k, l]) => `<option value="${k}" ${it?.base === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </div>
+      <fieldset class="space-y-2"><legend class="label">산출 방식</legend>
+        <div class="grid gap-2 sm:grid-cols-2">${Object.entries(CALC_TYPES).map(([k, t], i) => `<label class="flex cursor-pointer gap-3 rounded-lg border p-3 has-[:checked]:border-primary has-[:checked]:bg-accent/60 ${typeLocked ? 'pointer-events-none opacity-60' : ''}">
+          <input type="radio" name="imType" value="${k}" class="mt-0.5 size-4 shrink-0" ${(it ? it.type === k : i === 0) ? 'checked' : ''} ${typeLocked ? 'disabled' : ''}/>
+          <span class="space-y-1"><span class="block text-sm font-medium">${t.label}</span><span class="block text-xs text-muted-foreground">${t.formula}</span></span></label>`).join('')}</div>
+      </fieldset>
+      <div class="rounded-lg bg-muted/60 px-4 py-3 text-sm"><span class="text-muted-foreground">시뮬레이터 입력</span> <span id="imFields" class="font-medium"></span></div>
+    </form>`,
+    footer: `<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="imSave">저장</button>`,
+    onMount: (el, close) => {
+      const name = el.querySelector('#imName'), save = el.querySelector('#imSave');
+      const type = () => el.querySelector('input[name="imType"]:checked').value;
+      const sync = () => {
+        el.querySelector('#imFields').textContent = (typeLocked ? it.fields : CALC_TYPES[type()].fields).map(f => f.label).join(', ');
+        el.querySelector('#imBase').disabled = typeLocked || type() === 'MANUAL';
+        save.disabled = !name.value.trim();
+      };
+      el.addEventListener('input', sync); el.addEventListener('change', sync); sync();
+      save.addEventListener('click', () => {
+        const seg = el.querySelector('#imSeg').value, base = type() === 'MANUAL' ? null : el.querySelector('#imBase').value;
+        if (it) {
+          Object.assign(it, { name: name.value.trim(), segment: seg });
+          if (!typeLocked) { const k = it.key; Object.assign(it, { type: type(), base, fields: makeFields(k, type()) }); }
+        } else {
+          const k = 'item' + Date.now();
+          h.revenueItems.push({ key: k, name: name.value.trim(), segment: seg, type: type(), base, enabled: true, custom: true, fields: makeFields(k, type()) });
+        }
+        saveHospital(h); close(); render(); toast('저장했습니다.');
+      });
+    },
+  });
+}
+
+/* ---------- 재무 상수 ---------- */
+function profileTab() {
+  const h = hosp(), p = h.profile, unit = h.report === 'KRW' ? '₩' : '$';
+  const field = (label, value, suffix = '', help = '') => `<label class="block space-y-1.5"><span class="label flex items-center gap-1.5">${label}${tip(help, label)}</span>
+    <span class="flex items-center gap-2"><input class="input text-end tabular-nums" value="${value}" data-profile/>${suffix ? `<span class="shrink-0 text-sm text-muted-foreground">${suffix}</span>` : ''}</span></label>`;
+  const yearRow = (label, arr, suffix) => `<tr class="border-b last:border-0"><td class="td">${label} <span class="text-xs text-muted-foreground">${suffix}</span></td>${arr.map((v, i) => `<td class="td"><input class="input h-8 text-end tabular-nums" value="${F.int(v)}" data-profile aria-label="${label} Y${i + 1}"/></td>`).join('')}</tr>`;
+  const yearHead = `<tr class="border-b"><th class="th">항목</th>${YEARS.map(n => `<th class="th num">Y${n} <span class="text-[10px] font-normal">${h.baseYear + n}</span></th>`).join('')}</tr>`;
+  const allocation = [...COST_ITEMS, { key: 'capexAttr', label: 'CAPEX 귀속' }, { key: 'dep', label: '감가상각' }];
+  return `
+    ${card('인건비', '연 상승률은 복리로 적용합니다.', `
+      <div class="grid gap-4 md:grid-cols-3">${field('1인 인건비 (연)', F.int(p.laborUnitCost), unit, '직원 1명의 연간 인건비입니다. 연도별 인원을 곱해 인건비를 계산합니다.')}${field('연 상승률', p.laborInflation, '%', '1인 인건비가 매년 오르는 비율입니다. 복리로 적용합니다.')}
+        <label class="block space-y-1.5"><span class="label">상승률 근거</span><input class="input" value="${esc(p.laborInflationBasis)}" data-profile/></label></div>
+      <div class="mt-4 overflow-x-auto"><table class="w-full min-w-[560px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('인원', p.staff, '명')}</tbody></table></div>`, SOURCE.own)}
+    <div class="grid gap-6 lg:grid-cols-2">
+      ${card('세금·로열티', '', `<div class="grid gap-4 sm:grid-cols-3">${field('로열티율', p.royaltyRate, '%', '매출 대비 로열티 비율입니다.')}${field('법인세율', p.taxRate, '%', 'EBIT에 적용하는 세율입니다.')}${field('이월결손금 공제', p.taxLossYears, '년', GLOSSARY.이월결손금)}</div>`)}
+      ${card('기업가치', '시뮬레이터의 EV·민감도 계산에 쓰입니다.', `<div class="grid gap-4 sm:grid-cols-3">${field('WACC', p.wacc, '%', GLOSSARY.WACC)}${field('영구성장률', p.growth, '%', GLOSSARY.영구성장률)}${field('운전자본 비율', p.nwcRate, '%', '매출 증가분 중 운전자본으로 묶이는 비율입니다. ' + GLOSSARY.운전자본)}</div>`)}
+    </div>
+    ${card(`감가상각·CAPEX${term('CAPEX')}`, `단위 ${unit}`, `<div class="overflow-x-auto"><table class="w-full min-w-[640px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('감가상각', p.depreciation, unit)}${yearRow('CAPEX', p.capex, unit)}</tbody></table></div>`)}
+    ${card(`비용 배분${term('비용 배분')}`, 'Medical·Commerce 부문 손익을 나눌 때 비용 항목별로 쓰는 기준입니다.', `<div class="overflow-x-auto"><table class="w-full min-w-[480px] text-sm"><thead><tr class="border-b"><th class="th">비용 항목</th><th class="th">배분 기준</th></tr></thead>
+      <tbody>${allocation.map(c => `<tr class="border-b last:border-0"><td class="td">${c.label}</td><td class="td"><select class="select h-8 w-56" data-profile>${Object.entries(ALLOCATION_LABEL).map(([k, l]) => `<option value="${k}" ${h.allocation[c.key] === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>`)}
+    <div class="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/95 px-5 py-3 shadow-sm backdrop-blur">
+      <span class="text-sm text-muted-foreground">v${p.version} · ${p.updatedAt} · ${p.updatedBy}${state.profileDirty ? ' <span class="badge badge-warning ms-1">수정됨</span>' : ''}</span>
+      <div class="flex gap-2"><button type="button" class="btn btn-outline" id="profileReset" ${state.profileDirty ? '' : 'disabled'}>취소</button><button type="button" class="btn btn-default" id="profileSave" ${state.profileDirty ? '' : 'disabled'}><i data-lucide="save"></i>저장</button></div>
+    </div>`;
+}
+
+/* ---------- 환자 구분 계수 ---------- */
+function paramsTab() {
+  const h = hosp();
+  const cell = v => v == null ? '<span class="text-muted-foreground">-</span>' : `<input class="input h-8 w-24 text-end tabular-nums" value="${v}" />`;
+  return card('환자 구분 계수', '외래·입원·건강검진 구분별로 시뮬레이터가 환자 기반 인원을 계산할 때 쓰는 계수입니다.', `
+    <div class="overflow-x-auto"><table class="w-full min-w-[640px] text-sm">
+      <thead><tr class="border-b"><th class="th">구분</th><th class="th num"><span class="inline-flex items-center gap-1">만성질환 비율 (%)${tip('해당 구분 인원 중 만성질환자 비율입니다. 구독 전환 대상 인원을 정합니다.')}</span></th><th class="th num"><span class="inline-flex items-center gap-1">위험군 비율 (%)${tip('건강검진 수검자 중 위험군 비율입니다. Medical 구독 전환 대상이 됩니다.')}</span></th><th class="th num"><span class="inline-flex items-center gap-1">연계 계수 (×)${tip('연계율에 곱하는 보정값입니다. 1.0이면 입력한 연계율 그대로입니다.')}</span></th><th class="th num">연 환자 증가율 (%)</th></tr></thead>
+      <tbody>${h.params.map(p => `<tr class="border-b last:border-0"><td class="td font-medium">${VOLUME_TYPES.find(t => t.key === p.key).label}</td>
+        <td class="td num">${cell(p.chronic)}</td><td class="td num">${cell(p.risk)}</td><td class="td num">${cell(p.referral)}</td><td class="td num">${cell(p.growth)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="mt-4 flex justify-end"><button type="button" class="btn btn-default" data-fake-save><i data-lucide="save"></i>저장</button></div>`, SOURCE.own);
+}
+
+/* ---------- 시나리오 프리셋 ---------- */
+const presetFields = h => [
+  ...h.revenueItems.filter(i => i.enabled).map(i => ({ group: i.name, fields: i.fields.filter(f => !f.yearly) })),
+  { group: '비용', fields: [
+    { key: 'opexRate', label: '운영비율', unit: '%' }, { key: 'mktgRate', label: '마케팅·CAC·간접비', unit: '%' },
+    { key: 'bizdevK', label: '초기사업개발비', unit: h.report === 'KRW' ? '백만원' : '천$' }, { key: 'omRate', label: '유지보수비', unit: '%' },
+  ] },
+].filter(g => g.fields.length);
+const fmtVal = (f, v, h) => f.toggle ? (v ? '켜짐' : '꺼짐') : v == null ? '-' : `${f.money ? (h.report === 'KRW' ? '₩' : '$') : ''}${typeof v === 'number' ? v.toLocaleString('en-US') : v}${f.unit || ''}`;
+
+function presetsTab() {
+  const h = hosp();
+  if (!h.presets.some(p => p.key === state.preset)) state.preset = h.presets[0]?.key ?? null;
+  const p = h.presets.find(x => x.key === state.preset);
+  const list = h.presets.map(x => `<button type="button" data-preset="${x.key}" class="w-full space-y-1 rounded-lg border p-3 text-start transition-colors ${x.key === state.preset ? 'border-primary bg-accent/60' : 'hover:bg-accent/40'}">
+      <span class="flex flex-wrap items-center gap-1.5 text-sm font-medium">${esc(x.name)}${bandBadge(x.band)}${x.custom ? '<span class="badge badge-warning">추가</span>' : ''}</span>
+      <span class="block text-xs text-muted-foreground">${esc(x.desc)}</span>
+      <span class="block text-[11px] text-muted-foreground">이 프리셋으로 만든 시나리오 ${scenarioCount(x.key)}개 · ${x.updatedAt} ${esc(x.updatedBy)}</span></button>`).join('');
+  const detail = p ? (() => {
+    const values = { ...h.defaults, ...p.set };
+    const rows = presetFields(h).map(g => `<tr class="bg-muted/50"><td class="td text-xs font-semibold text-muted-foreground" colspan="3">${esc(g.group)}</td></tr>` + g.fields.map(f => {
+      const changed = Object.prototype.hasOwnProperty.call(p.set, f.key) && p.set[f.key] !== h.defaults[f.key];
+      return `<tr class="border-b"><td class="td ps-5">${f.label}</td><td class="td num ${changed ? 'font-semibold text-primary' : ''}">${fmtVal(f, values[f.key], h)}</td><td class="td num text-muted-foreground">${fmtVal(f, h.defaults[f.key], h)}</td></tr>`;
+    }).join('')).join('');
+    return `<div class="space-y-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="space-y-1"><div class="flex flex-wrap items-center gap-2"><h3 class="text-lg font-semibold">${esc(p.name)}</h3>${bandBadge(p.band)}</div><p class="text-sm text-muted-foreground">${esc(p.desc)}</p>
+          ${p.basedOn ? `<p class="text-xs text-muted-foreground">값 출처: ${esc(h.presets.find(x => x.key === p.basedOn)?.name ?? '삭제된 프리셋')}</p>` : ''}</div>
+        <div class="flex gap-2"><button type="button" class="btn btn-outline btn-sm" data-preset-edit="${p.key}"><i data-lucide="pencil"></i>편집</button>
+          <button type="button" class="btn btn-ghost btn-sm text-destructive hover:text-destructive" data-preset-delete="${p.key}"><i data-lucide="trash-2"></i>삭제</button></div>
+      </div>
+      <div class="overflow-x-auto"><table class="w-full min-w-[420px] text-sm"><thead><tr class="border-b"><th class="th">입력</th><th class="th num">이 프리셋</th><th class="th num"><span class="inline-flex items-center gap-1">병원 기본값${tip('프리셋에 값이 없는 입력은 병원 기본값을 씁니다.')}</span></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="text-xs text-muted-foreground">굵게 표시한 값이 병원 기본값과 다릅니다. 프리셋에 없는 입력은 병원 기본값을 씁니다.</p>
+    </div>`;
+  })() : '<p class="text-sm text-muted-foreground">프리셋이 없습니다. 프리셋을 추가하세요.</p>';
+  return card('시나리오 프리셋', '시나리오를 만들 때 고르는 시작 값 묶음입니다. 하한·상한 프리셋은 시뮬레이터의 EBITDA 밴드에 쓰입니다.', `
+    <div class="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div class="space-y-2">${list}</div><div class="min-w-0">${detail}</div></div>`,
+    `${SOURCE.own}<button type="button" class="btn btn-default btn-sm" id="addPreset"><i data-lucide="plus"></i>프리셋 추가</button>`);
+}
+
+function presetModal(key) {
+  const h = hosp(), editing = key ? h.presets.find(p => p.key === key) : null;
+  const groups = presetFields(h);
+  const inputs = src => {
+    const values = { ...h.defaults, ...(src ? src.set : {}) };
+    return groups.map(g => `<tr class="bg-muted/50"><td class="td text-xs font-semibold text-muted-foreground" colspan="2">${esc(g.group)}</td></tr>` + g.fields.map(f => `<tr class="border-b">
+      <td class="td ps-5">${f.label} <span class="text-xs text-muted-foreground">${f.money ? (h.report === 'KRW' ? '₩' : '$') : ''}${f.unit || ''}</span></td>
+      <td class="td text-end">${f.toggle ? `<input type="checkbox" class="size-4" data-pv="${f.key}" ${values[f.key] ? 'checked' : ''}/>` : `<input class="input h-8 w-32 text-end tabular-nums" data-pv="${f.key}" value="${values[f.key] ?? ''}"/>`}</td></tr>`).join('')).join('');
+  };
+  openModal({
+    title: editing ? '프리셋 편집' : '프리셋 추가', size: 'max-w-2xl',
+    desc: `${esc(h.name)}의 시나리오 프리셋입니다. 저장하면 시뮬레이터의 새 시나리오 만들기에서 고를 수 있습니다.`,
+    body: `<form class="space-y-4" onsubmit="return false">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block space-y-1.5"><span class="label">이름 <span class="text-destructive">*</span></span><input id="pmName" class="input" maxlength="30" value="${esc(editing?.name ?? '')}" placeholder="예: 신규 거점 확장"/>
+          <span id="pmMsg" class="block text-xs text-destructive"></span></label>
+        <label class="block space-y-1.5"><span class="label flex items-center gap-1.5">값 가져오기${tip('고른 프리셋의 값을 아래 표에 채웁니다. 채운 뒤 값을 고칠 수 있습니다.')}</span><select id="pmSrc" class="select"><option value="">병원 기본값</option>${h.presets.map(p => `<option value="${p.key}" ${(editing ? editing.key : '') === p.key ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      </div>
+      <label class="block space-y-1.5"><span class="label">설명</span><input id="pmDesc" class="input" maxlength="100" value="${esc(editing?.desc ?? '')}" placeholder="이 프리셋의 전제를 한 줄로 적어 두세요."/></label>
+      <fieldset class="space-y-2"><legend class="label flex items-center gap-1.5">밴드 역할${term('EBITDA 밴드')}</legend>
+        <div class="flex flex-wrap gap-4 text-sm">${[['', '없음'], ['LOW', '하한 (보수)'], ['HIGH', '상한 (공격)']].map(([v, l]) => `<label class="flex items-center gap-2"><input type="radio" name="pmBand" value="${v}" class="size-4" ${(editing?.band ?? '') === v ? 'checked' : ''}/>${l}</label>`).join('')}</div>
+        <p id="pmBandMsg" class="text-xs text-muted-foreground"></p></fieldset>
+      <div class="rounded-lg border"><table class="w-full text-sm"><tbody id="pmValues">${inputs(editing)}</tbody></table></div>
+    </form>`,
+    footer: `<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="pmSave">저장</button>`,
+    onMount: (el, close) => {
+      const name = el.querySelector('#pmName'), save = el.querySelector('#pmSave');
+      const sync = () => {
+        const v = name.value.trim(), dup = h.presets.some(p => p.name === v && p !== editing);
+        el.querySelector('#pmMsg').textContent = dup ? '같은 이름의 프리셋이 있습니다.' : '';
+        save.disabled = !v || dup;
+        const band = el.querySelector('input[name="pmBand"]:checked').value, holder = band && h.presets.find(p => p.band === band && p !== editing);
+        el.querySelector('#pmBandMsg').textContent = holder ? `저장하면 "${holder.name}"의 ${BAND_LABEL[band]} 역할이 해제됩니다.` : '';
+      };
+      el.querySelector('#pmSrc').addEventListener('change', e => { el.querySelector('#pmValues').innerHTML = inputs(h.presets.find(p => p.key === e.target.value)); });
+      el.addEventListener('input', sync); el.addEventListener('change', sync); sync();
+      save.addEventListener('click', () => {
+        const set = {};
+        el.querySelectorAll('[data-pv]').forEach(i => { const k = i.dataset.pv, v = i.type === 'checkbox' ? i.checked : +i.value; if (v !== h.defaults[k]) set[k] = v; });
+        const band = el.querySelector('input[name="pmBand"]:checked').value || null;
+        if (band) h.presets.forEach(p => { if (p.band === band && p !== editing) p.band = null; });
+        const src = el.querySelector('#pmSrc').value;
+        const today = new Date(), stamp = `${today.getFullYear()}.${String(today.getMonth() + 1).padStart(2, '0')}.${String(today.getDate()).padStart(2, '0')}`;
+        const data = { name: name.value.trim(), desc: el.querySelector('#pmDesc').value.trim(), band, set, updatedBy: '홍길동', updatedAt: stamp };
+        if (editing) Object.assign(editing, data);
+        else {
+          const basedOn = src ? (h.presets.find(p => p.key === src).basedOn || src) : null;
+          const p = { key: 'p' + Date.now(), ...data, basedOn, custom: true };
+          h.presets.push(p); state.preset = p.key;
+        }
+        saveHospital(h); close(); render(); toast('저장했습니다.');
+      });
+    },
+  });
+}
+
+/* ---------- 가정 ---------- */
+function assumptionsTab() {
+  const h = hosp();
+  const unverified = h.assumptions.filter(a => !a.verified).length;
+  return card('가정', '시뮬레이터 입력의 근거입니다. 미검증 가정은 시뮬레이터에 ⚠로 표시됩니다.', `
+    <div class="overflow-x-auto"><table class="w-full min-w-[760px] text-sm">
+      <thead><tr class="border-b"><th class="th">항목</th><th class="th num">값</th><th class="th">근거</th><th class="th"><span class="inline-flex items-center gap-1">검증${term('미검증 가정')}</span></th><th class="th">적용 시작일</th><th class="th"><span class="inline-flex items-center gap-1">범위${tip('시스템: 모든 병원 공통 값. 병원: 이 병원에서 따로 정한 값으로, 시스템 값보다 우선합니다.')}</span></th></tr></thead>
+      <tbody>${h.assumptions.map(a => `<tr class="border-b last:border-0">
+        <td class="td font-medium">${esc(a.label)}</td><td class="td num">${a.value}${a.unit}</td>
+        <td class="td max-w-[320px] truncate text-muted-foreground" title="${esc(a.basis)}">${esc(a.basis)}</td>
+        <td class="td">${a.verified ? '<span class="badge badge-secondary"><i data-lucide="check" class="size-3"></i>검증</span>' : '<span class="badge badge-destructive">⚠ 미검증</span>'}</td>
+        <td class="td tabular-nums">${a.validFrom}</td><td class="td">${a.scope === '시스템' ? '<span class="badge badge-outline">시스템</span>' : '<span class="badge badge-secondary">병원</span>'}</td></tr>`).join('')}</tbody></table></div>`,
+    `${unverified ? `<span class="badge badge-destructive">미검증 ${unverified}</span>` : ''}${SOURCE.own}`);
+}
+
+/* ---------- 렌더·이벤트 ---------- */
+const TAB_RENDER = { info: infoTab, items: itemsTab, profile: profileTab, params: paramsTab, presets: presetsTab, assumptions: assumptionsTab };
+function render() {
+  useCurrency(hosp());
+  renderTop();
+  document.getElementById('tabBody').innerHTML = TAB_RENDER[state.tab]();
+  lucide.createIcons();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab],[data-preset],[data-preset-edit],[data-preset-delete],#addPreset,#addItem,[data-item-edit],[data-item-delete],[data-item-toggle],[data-item-move],#profileSave,#profileReset,[data-fake-save]');
+  if (!t) return;
+  const h = hosp();
+  if (t.dataset.tab) { state.tab = t.dataset.tab; history.replaceState(null, '', '#' + state.tab); render(); }
+  else if (t.dataset.preset) { state.preset = t.dataset.preset; render(); }
+  else if (t.id === 'addPreset') presetModal(null);
+  else if (t.dataset.presetEdit) presetModal(t.dataset.presetEdit);
+  else if (t.dataset.presetDelete) {
+    const p = h.presets.find(x => x.key === t.dataset.presetDelete), n = scenarioCount(p.key);
+    confirmModal(`"${esc(p.name)}" 프리셋을 삭제합니다.${n ? ` 이 프리셋으로 만든 시나리오 ${n}개는 입력값을 그대로 두고 프리셋 연결만 해제됩니다.` : ''}`, () => {
+      h.presets = h.presets.filter(x => x !== p); saveHospital(h); render(); toast('삭제했습니다.');
+    }, { okLabel: '삭제', destructive: true, title: '프리셋 삭제' });
+  }
+  else if (t.id === 'addItem') itemModal(null);
+  else if (t.dataset.itemEdit) itemModal(t.dataset.itemEdit);
+  else if (t.dataset.itemDelete) {
+    const it = h.revenueItems.find(x => x.key === t.dataset.itemDelete);
+    confirmModal(`"${esc(it.name)}" 매출 항목을 삭제합니다. 시나리오에 입력한 이 항목의 값도 함께 사라집니다.`, () => {
+      h.revenueItems = h.revenueItems.filter(x => x !== it); saveHospital(h); render(); toast('삭제했습니다.');
+    }, { okLabel: '삭제', destructive: true, title: '매출 항목 삭제' });
+  }
+  else if (t.dataset.itemToggle) { const it = h.revenueItems.find(x => x.key === t.dataset.itemToggle); it.enabled = !it.enabled; saveHospital(h); render(); }
+  else if (t.dataset.itemMove) {
+    const [i, d] = t.dataset.itemMove.split(':').map(Number), arr = h.revenueItems;
+    [arr[i], arr[i + d]] = [arr[i + d], arr[i]]; saveHospital(h); render();
+  }
+  else if (t.id === 'profileSave') confirmModal('재무 상수를 바꾸면 이 병원의 모든 시나리오 계산 결과가 달라집니다. 저장할까요?', () => {
+    h.profile.version += 1; state.profileDirty = false; render(); toast('저장했습니다.');
+  }, { okLabel: '저장' });
+  else if (t.id === 'profileReset') { state.profileDirty = false; render(); }
+  else if (t.dataset.fakeSave !== undefined) toast('저장했습니다.');
+});
+/* 입력 중인 칸을 다시 그리면 입력값과 포커스를 잃으므로 저장 막대만 바꾼다 */
+function markProfileDirty() {
+  if (state.profileDirty) return;
+  state.profileDirty = true;
+  document.getElementById('profileSave').disabled = false;
+  document.getElementById('profileReset').disabled = false;
+  document.getElementById('profileSave').closest('div.sticky').querySelector('span').insertAdjacentHTML('beforeend', ' <span class="badge badge-warning ms-1">수정됨</span>');
+}
+document.addEventListener('input', e => { if (e.target.dataset.profile !== undefined) markProfileDirty(); });
+document.addEventListener('change', e => {
+  if (e.target.dataset.profile !== undefined) markProfileDirty();
+});
+
+render();
+</script>
+</body>
+</html>
