@@ -13,7 +13,7 @@
 <script>
 const page = mountShell({
   active: 'hospital', title: '병원 기초정보',
-  footer: '시안 — 입원 실적과 월별 추이는 예시값입니다. 추가·수정한 프리셋과 매출 항목은 이 브라우저에 저장되어 시뮬레이터 시안에 나타납니다.',
+  footer: '시안 — 입원 실적과 월별 추이는 예시값입니다. 이 화면에서 저장한 값(매출 항목·재무 상수·환자 구분 계수·프리셋)은 이 브라우저에 저장되고 시뮬레이터 계산에 바로 쓰입니다.',
 });
 
 const TABS = [
@@ -40,7 +40,7 @@ page.innerHTML = `
 const HOSPITALS = loadHospitals();
 const state = { hid: 'vista', tab: TABS.some(t => t.key === location.hash.slice(1)) ? location.hash.slice(1) : 'info', preset: null, profileDirty: false };
 const hosp = () => HOSPITALS.find(h => h.id === state.hid);
-const scenarioCount = key => (SCENARIO_SEED[state.hid] || []).filter(s => s.preset === key).length;
+const scenarioCount = key => loadScenarios(state.hid).filter(s => s.preset === key).length;
 
 const SOURCE = {
   ext: '<span class="badge badge-secondary"><i data-lucide="lock" class="size-3"></i>병원 시스템 제공 · 읽기 전용</span>',
@@ -86,7 +86,7 @@ function infoTab() {
       <td class="td num">${v.months}개월</td>
       <td class="td num">${v.months < 12 ? `<span class="inline-flex items-center gap-1.5"><span class="badge badge-warning">연환산</span>${F.int(annualized(v))}</span>` : F.int(v.count)}</td>
       <td class="td">${sparkBars(monthly(v, i + 1))}</td>
-      <td class="td text-xs text-muted-foreground">${v.note ? esc(v.note) : ''}</td>
+      <td class="td text-xs text-muted-foreground">${v.bySite ? h.sites.map(st => `${st.name} ${F.int(v.bySite[st.key])}`).join(' · ') : ''}${v.note ? `${v.bySite ? '<br>' : ''}${esc(v.note)}` : ''}</td>
     </tr>`;
   }).join('');
   const volumes = card('환자 실적', `외래·입원·건강검진으로 나눠 받은 ${h.baseYear} 실적입니다. 집계 기간이 12개월보다 짧으면 연환산 인원을 시뮬레이터에 넘깁니다.`, `
@@ -172,23 +172,23 @@ function itemModal(key) {
 /* ---------- 재무 상수 ---------- */
 function profileTab() {
   const h = hosp(), p = h.profile, unit = h.report === 'KRW' ? '₩' : '$';
-  const field = (label, value, suffix = '', help = '') => `<label class="block space-y-1.5"><span class="label flex items-center gap-1.5">${label}${tip(help, label)}</span>
-    <span class="flex items-center gap-2"><input class="input text-end tabular-nums" value="${value}" data-profile/>${suffix ? `<span class="shrink-0 text-sm text-muted-foreground">${suffix}</span>` : ''}</span></label>`;
-  const yearRow = (label, arr, suffix) => `<tr class="border-b last:border-0"><td class="td">${label} <span class="text-xs text-muted-foreground">${suffix}</span></td>${arr.map((v, i) => `<td class="td"><input class="input h-8 text-end tabular-nums" value="${F.int(v)}" data-profile aria-label="${label} Y${i + 1}"/></td>`).join('')}</tr>`;
+  const field = (key, label, value, suffix = '', help = '') => `<label class="block space-y-1.5"><span class="label flex items-center gap-1.5">${label}${tip(help, label)}</span>
+    <span class="flex items-center gap-2"><input class="input text-end tabular-nums" value="${value}" data-profile="${key}"/>${suffix ? `<span class="shrink-0 text-sm text-muted-foreground">${suffix}</span>` : ''}</span></label>`;
+  const yearRow = (key, label, arr, suffix) => `<tr class="border-b last:border-0"><td class="td">${label} <span class="text-xs text-muted-foreground">${suffix}</span></td>${arr.map((v, i) => `<td class="td"><input class="input h-8 text-end tabular-nums" value="${F.int(v)}" data-profile="${key}.${i}" aria-label="${label} Y${i + 1}"/></td>`).join('')}</tr>`;
   const yearHead = `<tr class="border-b"><th class="th">항목</th>${YEARS.map(n => `<th class="th num">Y${n} <span class="text-[10px] font-normal">${h.baseYear + n}</span></th>`).join('')}</tr>`;
   const allocation = [...COST_ITEMS, { key: 'capexAttr', label: 'CAPEX 귀속' }, { key: 'dep', label: '감가상각' }];
   return `
     ${card('인건비', '연 상승률은 복리로 적용합니다.', `
-      <div class="grid gap-4 md:grid-cols-3">${field('1인 인건비 (연)', F.int(p.laborUnitCost), unit, '직원 1명의 연간 인건비입니다. 연도별 인원을 곱해 인건비를 계산합니다.')}${field('연 상승률', p.laborInflation, '%', '1인 인건비가 매년 오르는 비율입니다. 복리로 적용합니다.')}
-        <label class="block space-y-1.5"><span class="label">상승률 근거</span><input class="input" value="${esc(p.laborInflationBasis)}" data-profile/></label></div>
-      <div class="mt-4 overflow-x-auto"><table class="w-full min-w-[560px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('인원', p.staff, '명')}</tbody></table></div>`, SOURCE.own)}
+      <div class="grid gap-4 md:grid-cols-3">${field('laborUnitCost', '1인 인건비 (연)', F.int(p.laborUnitCost), unit, '직원 1명의 연간 인건비입니다. 연도별 인원을 곱해 인건비를 계산합니다.')}${field('laborInflation', '연 상승률', p.laborInflation, '%', '1인 인건비가 매년 오르는 비율입니다. 복리로 적용합니다.')}
+        <label class="block space-y-1.5"><span class="label">상승률 근거</span><input class="input" value="${esc(p.laborInflationBasis)}" data-profile="laborInflationBasis" data-text/></label></div>
+      <div class="mt-4 overflow-x-auto"><table class="w-full min-w-[560px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('staff', '인원', p.staff, '명')}</tbody></table></div>`, SOURCE.own)}
     <div class="grid gap-6 lg:grid-cols-2">
-      ${card('세금·로열티', '', `<div class="grid gap-4 sm:grid-cols-3">${field('로열티율', p.royaltyRate, '%', '매출 대비 로열티 비율입니다.')}${field('법인세율', p.taxRate, '%', 'EBIT에 적용하는 세율입니다.')}${field('이월결손금 공제', p.taxLossYears, '년', GLOSSARY.이월결손금)}</div>`)}
-      ${card('기업가치', '시뮬레이터의 EV·민감도 계산에 쓰입니다.', `<div class="grid gap-4 sm:grid-cols-3">${field('WACC', p.wacc, '%', GLOSSARY.WACC)}${field('영구성장률', p.growth, '%', GLOSSARY.영구성장률)}${field('운전자본 비율', p.nwcRate, '%', '매출 증가분 중 운전자본으로 묶이는 비율입니다. ' + GLOSSARY.운전자본)}</div>`)}
+      ${card('세금·로열티', '', `<div class="grid gap-4 sm:grid-cols-3">${field('royaltyRate', '로열티율', p.royaltyRate, '%', '매출 대비 로열티 비율입니다.')}${field('taxRate', '법인세율', p.taxRate, '%', 'EBIT에 적용하는 세율입니다.')}${field('taxLossYears', '이월결손금 공제', p.taxLossYears, '년', GLOSSARY.이월결손금 + ' 0년이면 공제하지 않습니다.')}</div>`)}
+      ${card('기업가치', '시뮬레이터의 EV·민감도 계산에 쓰입니다.', `<div class="grid gap-4 sm:grid-cols-3">${field('wacc', 'WACC', p.wacc, '%', GLOSSARY.WACC)}${field('growth', '영구성장률', p.growth, '%', GLOSSARY.영구성장률)}${field('nwcRate', '운전자본 비율', p.nwcRate, '%', '매출 증가분 중 운전자본으로 묶이는 비율입니다. ' + GLOSSARY.운전자본)}</div>`)}
     </div>
-    ${card(`감가상각·CAPEX${term('CAPEX')}`, `단위 ${unit}`, `<div class="overflow-x-auto"><table class="w-full min-w-[640px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('감가상각', p.depreciation, unit)}${yearRow('CAPEX', p.capex, unit)}</tbody></table></div>`)}
+    ${card(`감가상각·CAPEX${term('CAPEX')}`, `단위 ${unit}`, `<div class="overflow-x-auto"><table class="w-full min-w-[640px] text-sm"><thead>${yearHead}</thead><tbody>${yearRow('depreciation', '감가상각', p.depreciation, unit)}${yearRow('capex', 'CAPEX', p.capex, unit)}</tbody></table></div>`)}
     ${card(`비용 배분${term('비용 배분')}`, 'Medical·Commerce 부문 손익을 나눌 때 비용 항목별로 쓰는 기준입니다.', `<div class="overflow-x-auto"><table class="w-full min-w-[480px] text-sm"><thead><tr class="border-b"><th class="th">비용 항목</th><th class="th">배분 기준</th></tr></thead>
-      <tbody>${allocation.map(c => `<tr class="border-b last:border-0"><td class="td">${c.label}</td><td class="td"><select class="select h-8 w-56" data-profile>${Object.entries(ALLOCATION_LABEL).map(([k, l]) => `<option value="${k}" ${h.allocation[c.key] === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>`)}
+      <tbody>${allocation.map(c => `<tr class="border-b last:border-0"><td class="td">${c.label}</td><td class="td"><select class="select h-8 w-56" data-profile="allocation.${c.key}" data-text>${Object.entries(ALLOCATION_LABEL).map(([k, l]) => `<option value="${k}" ${h.allocation[c.key] === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>`)}
     <div class="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/95 px-5 py-3 shadow-sm backdrop-blur">
       <span class="text-sm text-muted-foreground">v${p.version} · ${p.updatedAt} · ${p.updatedBy}${state.profileDirty ? ' <span class="badge badge-warning ms-1">수정됨</span>' : ''}</span>
       <div class="flex gap-2"><button type="button" class="btn btn-outline" id="profileReset" ${state.profileDirty ? '' : 'disabled'}>취소</button><button type="button" class="btn btn-default" id="profileSave" ${state.profileDirty ? '' : 'disabled'}><i data-lucide="save"></i>저장</button></div>
@@ -198,13 +198,21 @@ function profileTab() {
 /* ---------- 환자 구분 계수 ---------- */
 function paramsTab() {
   const h = hosp();
-  const cell = v => v == null ? '<span class="text-muted-foreground">-</span>' : `<input class="input h-8 w-24 text-end tabular-nums" value="${v}" />`;
-  return card('환자 구분 계수', '외래·입원·건강검진 구분별로 시뮬레이터가 환자 기반 인원을 계산할 때 쓰는 계수입니다.', `
-    <div class="overflow-x-auto"><table class="w-full min-w-[640px] text-sm">
-      <thead><tr class="border-b"><th class="th">구분</th><th class="th num"><span class="inline-flex items-center gap-1">만성질환 비율 (%)${tip('해당 구분 인원 중 만성질환자 비율입니다. 구독 전환 대상 인원을 정합니다.')}</span></th><th class="th num"><span class="inline-flex items-center gap-1">위험군 비율 (%)${tip('건강검진 수검자 중 위험군 비율입니다. Medical 구독 전환 대상이 됩니다.')}</span></th><th class="th num"><span class="inline-flex items-center gap-1">연계 계수 (×)${tip('연계율에 곱하는 보정값입니다. 1.0이면 입력한 연계율 그대로입니다.')}</span></th><th class="th num">연 환자 증가율 (%)</th></tr></thead>
+  const cell = (v, attr) => v == null ? '<span class="text-muted-foreground">-</span>' : `<input class="input ms-auto h-8 w-24 text-end tabular-nums" value="${v}" ${attr}/>`;
+  const th = (label, help) => `<th class="th num"><span class="inline-flex items-center gap-1">${label}${tip(help)}</span></th>`;
+  const byType = card('구분별 계수', '외래·입원·건강검진 인원에 적용하는 계수입니다.', `
+    <div class="overflow-x-auto"><table class="w-full min-w-[520px] text-sm">
+      <thead><tr class="border-b"><th class="th">구분</th>${th('위험군 비율 (%)', '건강검진 수검자 중 위험군 비율입니다. 위험군은 Medical 구독과 외래 연계 대상이 되고, 나머지는 Wellness 대상이 됩니다.')}${th('연 환자 증가율 (%)', '실적 인원이 매년 늘어나는 비율입니다. 복리로 적용합니다.')}</tr></thead>
       <tbody>${h.params.map(p => `<tr class="border-b last:border-0"><td class="td font-medium">${VOLUME_TYPES.find(t => t.key === p.key).label}</td>
-        <td class="td num">${cell(p.chronic)}</td><td class="td num">${cell(p.risk)}</td><td class="td num">${cell(p.referral)}</td><td class="td num">${cell(p.growth)}</td></tr>`).join('')}</tbody></table></div>
-    <div class="mt-4 flex justify-end"><button type="button" class="btn btn-default" data-fake-save><i data-lucide="save"></i>저장</button></div>`, SOURCE.own);
+        <td class="td num">${cell(p.risk, `data-param="${p.key}.risk"`)}</td><td class="td num">${cell(p.growth, `data-param="${p.key}.growth"`)}</td></tr>`).join('')}</tbody></table></div>`, SOURCE.own);
+  const bySite = card('거점별 계수', `${h.sites.map(st => st.name).join('·')} 거점은 한 병원으로 합산해 보여 주지만, 외래 환자 구성이 달라 거점마다 따로 계산합니다.`, `
+    <div class="overflow-x-auto"><table class="w-full min-w-[620px] text-sm">
+      <thead><tr class="border-b"><th class="th">거점</th><th class="th num">외래 실적</th><th class="th num">건강검진 실적</th>${th('외래 만성질환 비율 (%)', '외래 환자 중 만성질환자 비율입니다. 만성질환자는 Medical, 나머지는 Wellness 전환 대상입니다.')}${th('외래연계 계수 (×)', '시나리오의 외래연계율에 곱해 이 거점의 Y1 연계율을 정합니다. 1이면 입력한 연계율 그대로입니다.')}</tr></thead>
+      <tbody>${h.sites.map(st => { const vol = k => h.volumes.find(v => v.key === k)?.bySite?.[st.key]; return `<tr class="border-b last:border-0"><td class="td font-medium">${st.name}</td>
+        <td class="td num">${vol('OUT') != null ? F.int(vol('OUT')) : '-'}</td><td class="td num">${vol('CHK') != null ? F.int(vol('CHK')) : '-'}</td>
+        <td class="td num">${cell(st.chronic, `data-site="${st.key}.chronic"`)}</td><td class="td num">${cell(st.referral, `data-site="${st.key}.referral"`)}</td></tr>`; }).join('')}</tbody></table></div>
+    <p class="mt-3 text-xs text-muted-foreground">실적 인원은 병원 시스템 제공 값이며 읽기 전용입니다.</p>`, SOURCE.own);
+  return byType + bySite + `<div class="flex justify-end"><button type="button" class="btn btn-default" id="paramsSave"><i data-lucide="save"></i>저장</button></div>`;
 }
 
 /* ---------- 시나리오 프리셋 ---------- */
@@ -329,7 +337,7 @@ function render() {
 }
 
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-tab],[data-preset],[data-preset-edit],[data-preset-delete],#addPreset,#addItem,[data-item-edit],[data-item-delete],[data-item-toggle],[data-item-move],#profileSave,#profileReset,[data-fake-save]');
+  const t = e.target.closest('[data-tab],[data-preset],[data-preset-edit],[data-preset-delete],#addPreset,#addItem,[data-item-edit],[data-item-delete],[data-item-toggle],[data-item-move],#profileSave,#profileReset,#paramsSave');
   if (!t) return;
   const h = hosp();
   if (t.dataset.tab) { state.tab = t.dataset.tab; history.replaceState(null, '', '#' + state.tab); render(); }
@@ -356,11 +364,34 @@ document.addEventListener('click', e => {
     [arr[i], arr[i + d]] = [arr[i + d], arr[i]]; saveHospital(h); render();
   }
   else if (t.id === 'profileSave') confirmModal('재무 상수를 바꾸면 이 병원의 모든 시나리오 계산 결과가 달라집니다. 저장할까요?', () => {
-    h.profile.version += 1; state.profileDirty = false; render(); toast('저장했습니다.');
+    readProfileInputs(h);
+    h.profile.version += 1; h.profile.updatedAt = stampNow(); h.profile.updatedBy = '홍길동';
+    saveHospital(h); state.profileDirty = false; render(); toast('저장했습니다. 시뮬레이터 결과에 반영됩니다.');
   }, { okLabel: '저장' });
   else if (t.id === 'profileReset') { state.profileDirty = false; render(); }
-  else if (t.dataset.fakeSave !== undefined) toast('저장했습니다.');
+  else if (t.id === 'paramsSave') {
+    const num = el => +String(el.value).replace(/,/g, '');
+    const bad = [...document.querySelectorAll('[data-param],[data-site]')].find(el => !Number.isFinite(num(el)) || num(el) < 0);
+    if (bad) { bad.focus(); toast('0 이상의 숫자를 입력하세요.'); return; }
+    document.querySelectorAll('[data-param]').forEach(el => { const [k, f] = el.dataset.param.split('.'); h.params.find(p => p.key === k)[f] = num(el); });
+    document.querySelectorAll('[data-site]').forEach(el => { const [k, f] = el.dataset.site.split('.'); h.sites.find(st => st.key === k)[f] = num(el); });
+    saveHospital(h); render(); toast('저장했습니다. 시뮬레이터 결과에 반영됩니다.');
+  }
 });
+/* 재무 상수 입력값을 프로필에 옮긴다 — 키가 "staff.0"이면 배열 칸, "allocation.labor"면 비용 배분 */
+function readProfileInputs(h) {
+  document.querySelectorAll('[data-profile]').forEach(el => {
+    const [k, sub] = el.dataset.profile.split('.');
+    const v = el.dataset.text !== undefined ? el.value : +String(el.value).replace(/,/g, '') || 0;
+    if (k === 'allocation') h.allocation[sub] = v;
+    else if (sub != null) h.profile[k][+sub] = v;
+    else h.profile[k] = v;
+  });
+}
+function stampNow() {
+  const n = new Date(), p = x => String(x).padStart(2, '0');
+  return `${n.getFullYear()}.${p(n.getMonth() + 1)}.${p(n.getDate())} ${p(n.getHours())}:${p(n.getMinutes())}`;
+}
 /* 입력 중인 칸을 다시 그리면 입력값과 포커스를 잃으므로 저장 막대만 바꾼다 */
 function markProfileDirty() {
   if (state.profileDirty) return;

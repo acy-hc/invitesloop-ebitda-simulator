@@ -6,21 +6,25 @@
 <title>EBITDA 시뮬레이터 시안</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
 <script src="shared.js"></script>
+<script src="engine.js"></script>
+<script src="guide.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
 <script>
 const page = mountShell({
-  active: 'simulator', title: '시뮬레이터',
-  footer: '시안 — 결과는 VISTA 프로토타입 기준값입니다. 입력 조작은 계산에 연결되지 않으며, 기업가치는 FCF = 세후이익으로 둔 예시값입니다.',
+  active: 'simulator', title: '시뮬레이터', guide: 'simulator',
+  footer: '시안 + 프로토타입 — 결과는 이 화면 안에서 계산합니다. 병원 기초정보 기본값과 프리셋 입력이면 프로토타입(vista_v4) 기준값과 같은 결과가 나옵니다.',
 });
 
 page.innerHTML = `
   <section class="card" aria-label="분석 대상">
     <div class="flex flex-col gap-4 p-6 xl:flex-row xl:items-end xl:justify-between">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-end">
-        <label class="space-y-1.5 sm:w-80"><span class="label flex items-center gap-1.5">시나리오${term('시나리오')}</span><select id="scenarioSelect" class="select"></select></label>
+        <div class="space-y-1.5"><label for="scenarioSelect" class="label flex items-center gap-1.5">시나리오${term('시나리오')}</label>
+          <div class="flex gap-2"><select id="scenarioSelect" class="select sm:w-80"></select>
+            <button type="button" id="compareBtn" class="btn btn-secondary shrink-0" title="새 창에서 다른 시나리오와 비교합니다"><i data-lucide="git-compare"></i>비교하기<i data-lucide="external-link" class="opacity-60"></i></button></div></div>
         <div class="flex flex-wrap gap-2">
           <button type="button" id="newScenario" class="btn btn-outline"><i data-lucide="plus"></i>새 시나리오</button>
           <button type="button" id="copyScenario" class="btn btn-outline"><i data-lucide="copy"></i>복제</button>
@@ -32,7 +36,7 @@ page.innerHTML = `
         <button type="button" id="saveBtn" class="btn btn-default"><i data-lucide="save"></i>저장</button>
       </div>
     </div>
-    <div id="scenarioMeta" class="grid gap-4 border-t px-6 py-4 lg:grid-cols-2"></div>
+    <div id="scenarioMeta" class="flex flex-col gap-2 border-t px-6 py-3 lg:flex-row lg:items-center lg:justify-between"></div>
   </section>
 
   <div class="grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.5fr)]">
@@ -47,29 +51,19 @@ page.innerHTML = `
   </div>
 
   <section class="card">
-    <div class="card-header pb-0">
-      <div class="tabs-list" role="tablist">
-        <button type="button" class="tabs-trigger" role="tab" data-tab="compare">시나리오 비교</button>
-        <button type="button" class="tabs-trigger" role="tab" data-tab="formula">수식</button>
-      </div>
-    </div>
-    <div class="p-6" id="bottomTab"></div>
+    <div class="card-header"><h2 class="card-title flex items-center gap-1.5">수식${term('수식 세트')}</h2><p class="card-desc">계산에 쓰는 수식입니다. 초안으로 저장한 뒤 승인해야 반영됩니다.</p></div>
+    <div class="card-content" id="bottomTab"></div>
   </section>`;
 
 /* ---------- 데이터·상태 ---------- */
 const HOSPITALS = loadHospitals();
-const SCENARIOS = structuredClone(SCENARIO_SEED);
+const SCENARIOS = { vista: loadScenarios('vista') };
+const persistScenarios = () => saveScenarios(state.hid, scenarios());
 
-const FORMULAS = [
-  ['ramp', '램프', 'start + (target - start) * (year / (horizonYears - 1))', 'Y1 값에서 Y5 목표까지 선형으로 올린다.', 'start: Y1 값; target: Y5 목표; year: 연도 인덱스', '전환율·연계율·접점률·단가'],
-  ['volume', '환자 기반 인원', 'count * 12 / months * pow(1 + growth, year)', '집계 기간이 12개월보다 짧으면 연환산한 뒤 연 증가율을 적용한다.', 'count: 실적 인원; months: 집계 개월 수; growth: 환자 증가율', '외래·입원·건강검진 인원'],
-  ['subscription', '구독형 매출', 'base * conv * fee', '기반 인원 중 전환한 구독자에 구독료를 곱한다.', 'base: 기반 인원; conv: 전환율; fee: 구독료', '구독형 매출 항목'],
-  ['referralFee', '연계 수수료형 매출', 'base * rate * visits * cost * fee', '연계 환자의 진료비에 수수료율을 곱한다.', 'base: 기반 인원; rate: 연계율; visits: 방문횟수; cost: 진료비; fee: 수수료율', '연계 수수료형 매출 항목'],
-  ['maintenance', '유지보수비', 'revenue * omRate', '매출에 유지보수비 요율을 곱한다.', 'revenue: 매출 합계; omRate: 유지보수비 요율', '영업비용·EBITDA'],
-  ['tax', '법인세', 'max(0, ebit - carryforward) * taxRate', '이월결손금을 공제한 과세표준에 세율을 적용한다.', 'ebit: 영업이익; carryforward: 공제 가능한 이월결손금; taxRate: 법인세율', '세후이익·FCF'],
-];
-
-const state = { hid: 'vista', scenario: 's1', preset: null, drivers: {}, year: 5, dirty: false, tab: 'compare', compare: [], editedFormula: null };
+const state = { hid: 'vista', scenario: 's1', preset: null, drivers: {}, year: 5, dirty: false, formulas: {} };
+/* 계산 결과 — 입력이 바뀔 때마다 다시 계산한다 */
+let model = null;
+const compute = () => { model = runModel(hosp(), state.drivers, state.formulas); };
 const hosp = () => HOSPITALS.find(h => h.id === state.hid);
 const scenarios = () => SCENARIOS[state.hid];
 const scen = () => scenarios().find(s => s.id === state.scenario);
@@ -77,18 +71,24 @@ const presetOf = key => hosp().presets.find(p => p.key === key);
 const items = () => hosp().revenueItems.filter(i => i.enabled);
 
 function applyPreset(key) {
-  const h = hosp(), p = presetOf(key);
-  state.preset = p ? key : null;
-  state.drivers = { ...h.defaults, ...(p ? p.set : {}) };
+  state.preset = presetOf(key) ? key : null;
+  state.drivers = presetDrivers(hosp(), key);
+}
+/* 저장된 시나리오 입력을 불러온다 */
+function loadScenario() {
+  const sc = scen();
+  state.preset = presetOf(sc.preset) ? sc.preset : null;
+  state.drivers = scenarioDrivers(hosp(), sc);
+  state.dirty = false;
 }
 function selectHospital(id) {
   state.hid = id; useCurrency(hosp());
-  state.scenario = scenarios()[0].id; state.compare = scenarios().slice(1, 3).map(s => s.id);
-  applyPreset(scen().preset); state.dirty = false;
+  state.scenario = scenarios()[0].id;
+  loadScenario();
 }
 selectHospital('vista');
 
-const results = () => yearsFor(hosp(), state.preset ?? scen().preset);
+const results = () => model.years;
 const costFields = h => [
   { key: 'opexRate', label: '운영비율', unit: '%', min: 10, max: 35, step: 1, note: '매출 대비' },
   { key: 'mktgRate', label: '마케팅·CAC·간접비', unit: '%', min: 0, max: 50, step: 1, ramp: h.id === 'vista' ? 'Y1×50%' : null },
@@ -112,53 +112,63 @@ function renderToolbar() {
   document.getElementById('deleteScenario').disabled = scenarios().length <= 1;
 
   const h = hosp(), p = presetOf(state.preset);
-  const vols = h.volumes.map(v => {
-    const label = VOLUME_TYPES.find(t => t.key === v.key).label;
-    return `<li class="flex flex-wrap items-center gap-x-2 gap-y-1"><span class="w-14 shrink-0 text-muted-foreground">${label}</span><span class="tabular-nums">${periodText(v)}</span>
-      <span class="text-muted-foreground">${v.months}개월</span>${v.months < 12 ? `<span class="badge badge-warning">연환산</span>${term('연환산')}` : ''}</li>`;
+  const bandTag = (x, cls = 'badge-secondary') => x.band ? `<span class="badge ${cls} px-1.5 py-0 text-[10px]">${x.band === 'LOW' ? '하한' : '상한'}</span>` : '';
+  /* 프리셋 콤보 — 목록에서 설명과 Y5 EBITDA를 보고 고른다 */
+  const options = h.presets.map(x => {
+    const on = x.key === state.preset, ebitda = runModel(h, presetDrivers(h, x.key)).years[HORIZON - 1].ebitda;
+    return `<button type="button" role="option" aria-selected="${on}" data-preset-pick="${x.key}" class="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-start outline-none hover:bg-accent focus-visible:bg-accent ${on ? 'bg-accent/60' : ''}">
+      <i data-lucide="check" class="mt-0.5 size-4 shrink-0 text-primary ${on ? '' : 'invisible'}"></i>
+      <span class="min-w-0 flex-1 space-y-0.5"><span class="flex items-center gap-1.5 text-sm font-medium">${esc(x.name)}${bandTag(x)}<span class="ms-auto text-xs font-normal text-muted-foreground">Y5 EBITDA <b class="tabular-nums text-foreground ${neg(ebitda)}">${F.short(ebitda)}</b></span></span>
+        <span class="block text-xs text-muted-foreground">${esc(x.desc)}</span></span>
+    </button>`;
   }).join('');
   document.getElementById('scenarioMeta').innerHTML = `
-    <div class="space-y-2">
-      <div class="flex flex-wrap items-center gap-2 text-sm">
-        <span class="flex items-center gap-1 text-muted-foreground">프리셋${term('프리셋')}</span>
-        <select id="presetSelect" class="select h-8 w-48" aria-label="프리셋">
-          ${h.presets.map(x => `<option value="${x.key}" ${x.key === state.preset ? 'selected' : ''}>${esc(x.name)}${x.band ? ` (${x.band === 'LOW' ? '보수' : '공격'})` : ''}</option>`).join('')}
-          ${p ? '' : '<option selected disabled>프리셋 없음</option>'}
-        </select>
-        <button type="button" id="resetPreset" title="저장 전 수정한 값을 버리고 프리셋 값으로 돌립니다" class="btn btn-ghost btn-sm" ${state.dirty && p ? '' : 'disabled'}><i data-lucide="rotate-ccw"></i>프리셋 값으로 되돌리기</button>
-        <a href="hospital.html#presets" class="text-sm text-primary underline-offset-4 hover:underline">프리셋 관리</a>
+    <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+      <span class="flex shrink-0 items-center gap-1 font-medium">프리셋${term('프리셋')}</span>
+      <div class="relative" id="presetComboWrap">
+        <button type="button" id="presetCombo" aria-haspopup="listbox" aria-expanded="false" class="input flex h-8 w-56 cursor-pointer items-center gap-1.5 text-start">
+          <span class="flex min-w-0 flex-1 items-center gap-1.5 truncate">${p ? esc(p.name) + bandTag(p) : '<span class="text-muted-foreground">프리셋 없음</span>'}</span>
+          <i data-lucide="chevron-down" class="size-4 shrink-0 text-muted-foreground"></i></button>
+        <div id="presetList" role="listbox" aria-label="프리셋" class="absolute start-0 top-full z-40 mt-1 hidden max-h-80 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border bg-popover p-1 shadow-lg">${options}</div>
       </div>
-      <p class="text-sm text-muted-foreground">${p ? esc(p.desc) : '연결된 프리셋이 삭제되어 시나리오 값만 남아 있습니다.'}${sc.desc ? ` · ${esc(sc.desc)}` : ''}</p>
+      <span class="min-w-0 flex-1 truncate text-muted-foreground" title="${esc(p?.desc ?? '')}">${p ? esc(p.desc) : '연결된 프리셋이 삭제되어 시나리오 값만 남아 있습니다.'}</span>
     </div>
-    <div class="space-y-2 text-sm">
-      <div class="flex flex-wrap items-center gap-2"><i data-lucide="database" class="size-4 text-muted-foreground"></i><span class="font-medium">병원 실적 기간</span>${term('집계 기간')}
-        <span class="text-xs text-muted-foreground">병원 시스템 · ${h.receivedAt} 수신${h.locations.length > 1 ? ` · ${h.locations.join('·')} 합산` : ''}</span></div>
-      <ul class="space-y-1 text-sm">${vols}</ul>
+    <div class="flex shrink-0 items-center gap-1">
+      <button type="button" id="resetPreset" title="저장 전 수정한 값을 버리고 프리셋 값으로 돌립니다" class="btn btn-ghost btn-sm" ${state.dirty && p ? '' : 'disabled'}><i data-lucide="rotate-ccw"></i>되돌리기</button>
+      <a href="hospital.html#presets" class="btn btn-ghost btn-sm text-primary"><i data-lucide="settings-2"></i>프리셋 관리</a>
     </div>`;
+}
+function togglePresetList(open) {
+  const list = document.getElementById('presetList'), btn = document.getElementById('presetCombo');
+  if (!list) return;
+  const next = open ?? list.classList.contains('hidden');
+  list.classList.toggle('hidden', !next); btn.setAttribute('aria-expanded', next);
+  if (next) (list.querySelector('[aria-selected="true"]') || list.querySelector('[role="option"]'))?.focus();
 }
 
 /* ---------- 입력판 ---------- */
 function driverRow(it) {
-  const v = state.drivers[it.key];
+  const s = state.drivers, actualOn = it.actual != null && s[it.key + '@actual'];
+  const v = actualOn ? it.actual : s[it.key] ?? it.def;
   if (it.toggle) {
     return `<div class="flex items-center justify-between gap-3 py-1.5"><span class="flex items-center gap-1.5 text-sm">${it.label}${tip(fieldHelp(it), it.label)}</span>${switchHtml(v, `data-toggle="${it.key}"`)}</div>`;
   }
   if (it.yearly) {
     return `<div class="space-y-1.5 py-2"><span class="flex items-center gap-1.5 text-sm">${it.label}${tip(fieldHelp(it), it.label)} <span class="text-xs text-muted-foreground">${CUR.sym}</span></span>
-      <div class="grid grid-cols-5 gap-1.5">${YEARS.map(n => `<input class="input h-8 px-2 text-end text-xs tabular-nums" placeholder="Y${n}" aria-label="${it.label} Y${n}" data-driver="${it.key}.${n}" />`).join('')}</div></div>`;
+      <div class="grid grid-cols-5 gap-1.5">${YEARS.map(n => `<input type="number" class="input h-8 px-2 text-end text-xs tabular-nums" placeholder="Y${n}" aria-label="${it.label} Y${n}" value="${s[`${it.key}.${n}`] ?? ''}" data-driver="${it.key}.${n}" />`).join('')}</div></div>`;
   }
   const warn = it.warn ? `<span class="badge badge-destructive px-1.5 py-0" title="${esc(it.warn)}">⚠</span>` : '';
   const actual = it.actual != null
-    ? `<label class="flex items-center gap-1.5 text-xs text-muted-foreground">${switchHtml(false, 'class="switch scale-90"')}실적값 사용 (${it.actual})</label>${term('실적값 사용')}` : '';
+    ? `<span class="flex items-center gap-1.5 text-xs text-muted-foreground">${switchHtml(actualOn, `data-toggle="${it.key}@actual" aria-label="${it.label} 실적값 사용"`)}실적값 사용 (${it.actual})${term('실적값 사용')}</span>` : '';
   const ramp = it.ramp != null
-    ? `<div class="flex items-center gap-2 text-xs text-muted-foreground"><span class="flex shrink-0 items-center gap-1">Y5 목표${term('Y5 목표')}</span><input class="input h-7 w-20 px-2 text-xs" placeholder="${it.ramp}" aria-label="${it.label} Y5 목표" /><span>${typeof it.ramp === 'number' ? it.unit : ''}</span></div>` : '';
+    ? `<div class="flex items-center gap-2 text-xs text-muted-foreground"><span class="flex shrink-0 items-center gap-1">Y5 목표${term('Y5 목표')}</span><input type="number" class="input h-7 w-24 px-2 text-xs" placeholder="${+rampTarget(hosp(), { ...s, [it.key + '@5']: null }, it.key, v).toFixed(2)}" value="${s[it.key + '@5'] ?? ''}" data-driver="${it.key}@5" aria-label="${it.label} Y5 목표" /><span>${fieldUnit(it)}</span></div>` : '';
   const control = it.number
-    ? `<input type="number" class="input h-8 w-32 text-end tabular-nums" value="${v ?? 0}" data-driver="${it.key}" aria-label="${it.label}" />`
-    : `<input type="range" class="w-full" min="${it.min}" max="${it.max}" step="${it.step}" value="${v ?? it.def ?? it.min}" data-driver="${it.key}" aria-label="${it.label}" />`;
+    ? `<input type="number" class="input h-8 w-32 text-end tabular-nums" value="${v ?? 0}" data-driver="${it.key}" aria-label="${it.label}" ${actualOn ? 'disabled' : ''}/>`
+    : `<input type="range" class="w-full" min="${it.min}" max="${it.max}" step="${it.step}" value="${v ?? it.min}" data-driver="${it.key}" aria-label="${it.label}" ${actualOn ? 'disabled' : ''}/>`;
   return `<div class="space-y-1.5 py-2">
     <div class="flex items-center justify-between gap-2">
       <span class="flex items-center gap-1.5 text-sm">${it.label}${tip(fieldHelp(it), it.label)}${warn}${it.note ? `<span class="text-xs text-muted-foreground">${it.note}</span>` : ''}${it.number ? `<span class="text-xs text-muted-foreground">${fieldUnit(it)}</span>` : ''}</span>
-      ${it.number ? control : `<span class="text-sm font-semibold tabular-nums" data-value="${it.key}">${v ?? it.def ?? it.min}${fieldUnit(it)}</span>`}
+      ${it.number ? control : `<span class="text-sm font-semibold tabular-nums" data-value="${it.key}">${v ?? it.min}${fieldUnit(it)}</span>`}
     </div>
     ${it.number ? '' : control}
     ${ramp || actual ? `<div class="flex flex-wrap items-center justify-between gap-2">${ramp}${actual}</div>` : ''}
@@ -175,11 +185,12 @@ function renderDrivers() {
   document.getElementById('driverCaption').textContent = `기준연도 ${h.baseYear} · Y1 = ${h.baseYear + 1}`;
 
   const volumes = `<table class="w-full text-sm"><thead><tr class="border-b"><th class="th">구분</th><th class="th num">연간 인원</th><th class="th"><span class="inline-flex items-center gap-1">기간${term('집계 기간')}</span></th><th class="th text-end"><span class="inline-flex items-center gap-1">직접 입력${term('직접 입력')}</span></th></tr></thead>
-    <tbody>${h.volumes.map(v => `<tr class="border-b last:border-0">
+    <tbody>${h.volumes.map(v => { const o = s['vol.' + v.key]; return `<tr class="border-b last:border-0">
       <td class="td">${VOLUME_TYPES.find(t => t.key === v.key).label}</td>
-      <td class="td num">${F.int(annualized(v))}${v.months < 12 ? `<div class="text-[11px] text-muted-foreground">실적 ${F.int(v.count)}</div>` : ''}</td>
+      <td class="td num">${o != null ? `<input type="number" class="input h-8 w-24 text-end tabular-nums" value="${o}" data-driver="vol.${v.key}" aria-label="${VOLUME_TYPES.find(t => t.key === v.key).label} 연간 인원"/><div class="text-[11px] text-muted-foreground">실적 ${F.int(annualized(v))}</div>`
+        : `${F.int(annualized(v))}${v.months < 12 ? `<div class="text-[11px] text-muted-foreground">실적 ${F.int(v.count)}</div>` : ''}`}</td>
       <td class="td text-xs text-muted-foreground">${v.from}~${v.to.slice(5)}<div>${v.months}개월${v.months < 12 ? ' · 연환산' : ''}</div></td>
-      <td class="td text-end">${switchHtml(false)}</td></tr>`).join('')}</tbody></table>
+      <td class="td text-end">${switchHtml(o != null, `data-vol="${v.key}" aria-label="직접 입력"`)}</td></tr>`; }).join('')}</tbody></table>
     <p class="mt-2 text-xs text-muted-foreground">병원 시스템 ${h.receivedAt} 수신${h.locations.length > 1 ? ` · ${h.locations.join('·')} 거점 합산` : ''}</p>`;
 
   const revenue = items().map(it => {
@@ -203,7 +214,7 @@ function renderDrivers() {
     section(`환자 기반 <span class="text-xs font-normal text-muted-foreground">병원 실적</span>${tip('병원 시스템이 보낸 외래·입원·건강검진 인원입니다. 매출 항목은 이 인원에서 계산을 시작합니다.')}`, volumes) +
     section(`매출 항목 <span class="text-xs font-normal text-muted-foreground">${items().length}개</span>${tip('병원 기초정보에서 사용으로 켠 매출 항목입니다. 항목마다 산출 방식에 맞는 입력이 나옵니다.')}`, revenueBlock, { extra: '<a href="hospital.html#items" class="text-xs font-normal text-primary underline-offset-4 hover:underline" onclick="event.stopPropagation()">항목 관리</a>' }) +
     section(`비용${tip('매출 대비 비율이나 금액으로 넣는 비용입니다. 인건비·로열티는 병원 기초정보의 재무 상수에서 정합니다.')}`, cost) +
-    (h.reservoir ? section(`구독자 누적 (Reservoir)${tip(fieldHelp({ key: 'reservoir' }))}${s.reservoir ? ' <span class="text-xs font-normal text-muted-foreground">유효 이탈률 21.9%</span>' : ''}`, reservoir, { extra: switchHtml(s.reservoir, 'data-toggle="reservoir" onclick="event.preventDefault()"') }) : '') +
+    (h.reservoir ? section(`구독자 누적 (Reservoir)${tip(fieldHelp({ key: 'reservoir' }))}${s.reservoir ? ` <span class="text-xs font-normal text-muted-foreground">유효 이탈률 ${F.pct(effectiveChurn(h, s))}</span>` : ''}`, reservoir, { extra: switchHtml(s.reservoir, 'data-toggle="reservoir" onclick="event.preventDefault()"') }) : '') +
     section('기타', etc, { open: false });
 }
 
@@ -213,7 +224,7 @@ function waterfallSvg(y) {
   const segRev = seg => its.filter(i => i.segment === seg).reduce((a, i) => a + (y.rev[i.key] || 0), 0);
   const steps = [['Medical 매출', segRev('Medical')]];
   if (segRev('Commerce')) steps.push(['Commerce 매출', segRev('Commerce')]);
-  steps.push(['인건비', -y.cost.labor], ['운영비', -y.cost.opex], ['마케팅', -y.cost.mktg], ['기타 비용', -(y.cost.bizdev + y.cost.royalty + y.cost.om)]);
+  steps.push(['인건비', -y.cost.labor], ['운영비', -y.cost.opex], ['마케팅', -y.cost.mktg], ['기타 비용', -(y.cost.bizdev + y.cost.royalty + y.cost.om + y.cost.hc)]);
   const W = 680, H = 230, P = { l: 64, r: 12, t: 20, b: 30 };
   let run = 0; const bars = steps.map(([l, v]) => { const from = run; run += v; return { l, from, to: run, v }; });
   bars.push({ l: 'EBITDA', from: 0, to: run, v: run, total: true });
@@ -237,7 +248,9 @@ function renderResults() {
   const series = k => years.map(yy => typeof k === 'function' ? k(yy) : yy[k]);
   const ebitdaLabel = d.hcAttr ? 'CAPEX 포함 EBITDA' : 'EBITDA';
   const lowP = h.presets.find(p => p.band === 'LOW'), highP = h.presets.find(p => p.band === 'HIGH');
-  const lo = lowP ? yearsFor(h, lowP.key)[state.year - 1].ebitda : null, hi = highP ? yearsFor(h, highP.key)[state.year - 1].ebitda : null;
+  const bandOf = p => runModel(h, presetDrivers(h, p.key), state.formulas).years[state.year - 1].ebitda;
+  const lo = lowP ? bandOf(lowP) : null, hi = highP ? bandOf(highP) : null;
+  const costItems = COST_ITEMS.filter(c => c.key !== 'hc' || d.hcAttr);
   const v = valuation(years, h.profile.wacc, h.profile.growth), tvRatio = v ? v.tv / v.ev : 0;
 
   const yearTabs = `<div class="tabs-list" role="tablist" aria-label="연도">${YEARS.map(n => `<button type="button" class="tabs-trigger" role="tab" data-year="${n}" data-state="${state.year === n ? 'active' : 'inactive'}" title="${h.baseYear + n}">Y${n}</button>`).join('')}</div>`;
@@ -276,10 +289,10 @@ function renderResults() {
   ] });
 
   /* 비용 항목별 */
-  const costBars = COST_ITEMS.map((c, i) => ({ name: c.label, values: years.map(yy => yy.cost[c.key]), color: tone(i), opacity: toneOpacity(i) }));
+  const costBars = costItems.map((c, i) => ({ name: c.label, values: years.map(yy => yy.cost[c.key]), color: tone(i), opacity: toneOpacity(i) }));
   const costChart = chart({ mode: 'stack', selected: state.year, baseYear: h.baseYear, bars: costBars });
   const costTable = yearTable({ selected: state.year, baseYear: h.baseYear, rows: [
-    ...COST_ITEMS.map((c, i) => ({ label: c.label, values: costBars[i].values, swatch: tone(i), opacity: toneOpacity(i) })),
+    ...costItems.map((c, i) => ({ label: c.label, values: costBars[i].values, swatch: tone(i), opacity: toneOpacity(i) })),
     { label: '영업비용 합계', values: costS, kind: 'key' },
     { label: '매출 대비', values: years.map(yy => yy.revTotal ? yy.costTotal / yy.revTotal : 0), kind: 'pct' },
   ] });
@@ -290,7 +303,7 @@ function renderResults() {
     ...its.map(it => ({ label: esc(it.name), values: years.map(yy => yy.rev[it.key] || 0), kind: 'sub' })),
     { label: '매출 합계', values: revS, kind: 'total' },
     { label: '영업비용', kind: 'header' },
-    ...COST_ITEMS.map(c => ({ label: c.label, values: years.map(yy => yy.cost[c.key]), kind: 'sub' })),
+    ...costItems.map(c => ({ label: c.label, values: years.map(yy => yy.cost[c.key]), kind: 'sub' })),
     { label: '영업비용 합계', values: costS, kind: 'total' },
     { label: ebitdaLabel, values: ebS, kind: 'key' },
     { label: '감가상각', values: series('dep'), kind: 'sub' },
@@ -298,7 +311,7 @@ function renderResults() {
     { label: '법인세', values: series('tax'), kind: 'sub' },
     { label: '세후이익', values: series('nopat'), kind: 'total' },
     { label: 'CAPEX', values: series('capex'), kind: 'sub' },
-    { label: '운전자본 증가', values: years.map(() => 0), kind: 'sub' },
+    { label: '운전자본 증가', values: series('nwc'), kind: 'sub' },
     { label: 'FCF', values: series('fcf'), kind: 'key' },
   ] });
 
@@ -352,58 +365,60 @@ function renderResults() {
       </div></details>`;
 }
 
-/* ---------- 하단 탭 ---------- */
+/* ---------- 수식 ---------- */
+const traceNum = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 });
+/* 선택 연도의 대입값 — 같은 수식이 거점·연도마다 여러 번 쓰인다 */
+function tracesOf(key) {
+  const re = new RegExp(`Y${state.year}(\\s|$)`);
+  return [...model.ctx.traces.values()].filter(t => t.key === key && re.test(t.label));
+}
 function renderBottom() {
-  document.querySelectorAll('[data-tab]').forEach(b => b.dataset.state = b.dataset.tab === state.tab ? 'active' : 'inactive');
   const el = document.getElementById('bottomTab'), h = hosp();
-  if (state.tab === 'compare') {
-    const ids = [state.scenario, ...state.compare.filter(id => id !== state.scenario)].slice(0, 3);
-    const cols = ids.map(id => { const s = scenarios().find(x => x.id === id); return { s, years: yearsFor(h, s.preset) }; });
-    const metric = [['매출', y => y.revTotal], ['EBITDA', y => y.ebitda], ['세후이익', y => y.nopat]];
-    el.innerHTML = `<div class="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-      <fieldset class="space-y-2"><legend class="mb-2 flex items-center gap-1.5 text-sm font-semibold">비교할 시나리오 <span class="font-normal text-muted-foreground">(최대 3개)</span>${tip('현재 시나리오와 함께 볼 시나리오를 2개까지 고릅니다. 모두 같은 계산엔진과 승인된 수식으로 다시 계산합니다.')}</legend>
-        ${scenarios().map(s => { const cur = s.id === state.scenario, on = cur || state.compare.includes(s.id); return `<label class="flex items-center gap-2 text-sm ${cur ? 'text-muted-foreground' : ''}"><input type="checkbox" class="size-4" data-compare="${s.id}" ${on ? 'checked' : ''} ${cur ? 'disabled' : ''}/>${esc(s.name)}${cur ? ' (현재)' : ''}</label>`; }).join('')}
-      </fieldset>
-      <div class="min-w-0 space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="text-sm font-semibold">EBITDA 추이</h3>
-          ${legend(cols.map((c, k) => ({ name: c.s.name, color: tone(k), line: true })))}
-        </div>
-        ${chart({ baseYear: h.baseYear, selected: state.year, lines: cols.map((c, k) => ({ name: c.s.name, values: c.years.map(y => y.ebitda), color: tone(k) })) })}
-        <div class="border-t pt-2">${yearTable({ selected: state.year, baseYear: h.baseYear, rows: metric.flatMap(([l, f]) => [
-          { label: l, kind: 'header' },
-          ...cols.map((c, k) => ({ label: esc(c.s.name), values: c.years.map(f), swatch: tone(k) })),
-        ]) })}</div>
-        <div class="flex flex-wrap gap-3">${cols.map((c, k) => { const v = valuation(c.years, h.profile.wacc, h.profile.growth); return `<div class="min-w-40 flex-1 rounded-lg border p-3"><div class="flex items-center gap-1.5 text-xs text-muted-foreground"><span class="size-2.5 rounded-sm" style="background:${tone(k)}"></span>${esc(c.s.name)} · EV</div><div class="text-lg font-bold tabular-nums">${v ? F.short(v.ev) : '-'}</div></div>`; }).join('')}</div>
-      </div></div>`;
-  } else {
-    el.innerHTML = `<div class="space-y-4">
-      <div class="flex flex-wrap items-end justify-between gap-3">
-        <label class="space-y-1.5"><span class="label flex items-center gap-1.5">수식 세트${term('수식 세트')}</span>
-          <select class="select w-72"><option>${esc(h.name)} 기본 v3 · 승인됨</option><option>${esc(h.name)} 기본 v4 · 초안</option></select></label>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-sm text-muted-foreground">수정 ${state.editedFormula ? 1 : 0}개 · 오류 0개</span>
-          <button type="button" class="btn btn-outline btn-sm"><i data-lucide="rotate-ccw"></i>전체 기본식 복원</button>
-          <button type="button" class="btn btn-outline btn-sm" ${state.editedFormula ? '' : 'disabled'}>초안으로 저장</button>
-          <button type="button" class="btn btn-default btn-sm" disabled>승인</button>
-        </div>
+  const edited = Object.keys(state.formulas), errors = model.ctx.errors;
+  el.innerHTML = `<div class="space-y-4">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <label class="space-y-1.5"><span class="label">수식 세트</span>
+        <select class="select w-72"><option>${esc(h.name)} 기본 · 승인됨</option></select></label>
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="formulaStatus" class="text-sm text-muted-foreground">수정 ${edited.length}개 · 오류 ${errors.size}개</span>
+        <button type="button" class="btn btn-outline btn-sm" data-formula-reset="" ${edited.length ? '' : 'disabled'}><i data-lucide="rotate-ccw"></i>전체 기본식 복원</button>
+        <button type="button" class="btn btn-outline btn-sm" data-formula-draft ${edited.length && !errors.size ? '' : 'disabled'}>초안으로 저장</button>
+        <button type="button" class="btn btn-default btn-sm" disabled title="초안을 저장한 뒤 승인할 수 있습니다">승인</button>
       </div>
-      <div class="divide-y rounded-lg border">${FORMULAS.map(([k, name, f, mean, vars, target]) => `
-        <div class="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-          <div class="space-y-1">
-            <div class="flex items-center gap-2"><span class="font-semibold">${name}</span><code class="rounded bg-muted px-1.5 py-0.5 text-xs">${k}</code>${state.editedFormula === k ? '<span class="badge badge-warning">수정됨</span>' : ''}</div>
-            <p class="text-sm text-muted-foreground">${mean}</p>
-            <p class="text-xs text-muted-foreground">변수 — ${vars}</p>
-            <p class="text-xs text-muted-foreground">반영 — ${target}</p>
+    </div>
+    ${edited.length ? '<div class="flex items-start gap-2 rounded-lg border border-warning/60 bg-warning/10 px-3 py-2 text-sm"><i data-lucide="flask-conical" class="mt-0.5 size-4 shrink-0 text-warning"></i>수정한 수식으로 이 화면의 결과를 바로 계산해 보고 있습니다. 승인 전이므로 저장한 시나리오와 비교 창은 기본식으로 계산합니다.</div>' : ''}
+    <p class="text-xs text-muted-foreground">숫자·변수·사칙연산·괄호와 min·max·abs·round·floor·ceil·pow만 쓸 수 있습니다. 틀린 수식은 기본식으로 계산하고 오류를 표시합니다.</p>
+    <div class="divide-y rounded-lg border">${FORMULA_META.map(m => {
+      const expr = state.formulas[m.key] ?? m.expr, err = errors.get(m.key), tr = tracesOf(m.key);
+      return `<div class="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+        <div class="space-y-1">
+          <div class="flex flex-wrap items-center gap-2"><span class="font-semibold">${m.label}</span><code class="rounded bg-muted px-1.5 py-0.5 text-xs">${m.key}</code>${state.formulas[m.key] != null ? '<span class="badge badge-warning">수정됨</span>' : ''}</div>
+          <p class="text-sm text-muted-foreground">${m.meaning}</p>
+          <p class="text-xs text-muted-foreground">변수 — ${m.variables}</p>
+          <p class="text-xs text-muted-foreground">반영 — ${m.impact}</p>
+        </div>
+        <div class="space-y-2">
+          <textarea data-formula="${m.key}" rows="2" spellcheck="false" class="textarea font-mono text-xs ${err ? 'border-destructive' : ''}">${esc(expr)}</textarea>
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span data-formula-error="${m.key}" class="text-destructive">${err ? esc(err) + ' — 기본식으로 계산했습니다.' : ''}</span>
+            ${state.formulas[m.key] != null ? `<button type="button" class="text-primary underline-offset-4 hover:underline" data-formula-reset="${m.key}">기본식으로</button>` : ''}
           </div>
-          <div class="space-y-2">
-            <textarea data-formula="${k}" rows="2" class="textarea font-mono">${f}</textarea>
-            <details class="text-xs"><summary class="cursor-pointer text-muted-foreground">대입값 보기 · Y${state.year}</summary><pre class="mt-2 overflow-x-auto rounded-md bg-muted p-3">${esc(h.name)} Y${state.year}: ${f}\n  = (계산엔진 연결 후 표시)</pre></details>
-          </div>
-        </div>`).join('')}</div>
-      <p class="text-center text-sm text-muted-foreground">30개 중 6개 표시</p>
-    </div>`;
-  }
+          <details class="text-xs"><summary class="cursor-pointer text-muted-foreground">대입값 보기 · Y${state.year} (${tr.length}건)</summary>
+            <div class="mt-2 max-h-56 space-y-1 overflow-auto rounded-md bg-muted p-3 font-mono">${tr.length ? tr.map(t => `<div><span class="text-muted-foreground">${esc(t.label)}</span> ${Object.entries(t.vars).map(([k, v]) => `${k}=${traceNum(v)}`).join(', ')} <b>→ ${traceNum(t.value)}</b></div>`).join('') : '<span class="text-muted-foreground">이 연도에는 쓰이지 않았습니다.</span>'}</div></details>
+        </div>
+      </div>`;
+    }).join('')}</div>
+  </div>`;
+}
+/* 수식을 입력하는 동안에는 칸을 다시 그리지 않고 오류 문구만 바꾼다 — 다시 그리면 입력 중인 칸의 포커스를 잃는다 */
+function updateFormulaStatus() {
+  const errors = model.ctx.errors;
+  document.getElementById('formulaStatus').textContent = `수정 ${Object.keys(state.formulas).length}개 · 오류 ${errors.size}개`;
+  document.querySelectorAll('[data-formula-error]').forEach(el => {
+    const err = errors.get(el.dataset.formulaError);
+    el.textContent = err ? err + ' — 기본식으로 계산했습니다.' : '';
+    document.querySelector(`[data-formula="${el.dataset.formulaError}"]`).classList.toggle('border-destructive', !!err);
+  });
 }
 
 /* ---------- 시나리오 생성·복제·삭제 ---------- */
@@ -440,64 +455,115 @@ function scenarioModal(mode) {
       name.addEventListener('input', validate); validate();
       submit.addEventListener('click', () => {
         const preset = isCopy ? state.preset : el.querySelector('input[name="nsPreset"]:checked').value;
-        const now = new Date(), stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        const s = { id: 'n' + Date.now(), name: name.value.trim(), desc: el.querySelector('#nsDesc').value.trim(), preset, version: 1, updatedAt: stamp };
-        scenarios().push(s);
-        const drivers = { ...state.drivers };
-        state.scenario = s.id; state.dirty = false;
-        if (isCopy) { state.preset = preset; state.drivers = drivers; } else applyPreset(preset);
+        const s = { id: 'n' + Date.now(), name: name.value.trim(), desc: el.querySelector('#nsDesc').value.trim(), preset, version: 1, updatedAt: stampNow(), drivers: isCopy ? structuredClone(state.drivers) : presetDrivers(h, preset) };
+        scenarios().push(s); persistScenarios();
+        state.scenario = s.id; loadScenario();
         close(); renderAll(); toast(isCopy ? '시나리오를 복제했습니다.' : '시나리오를 만들었습니다.');
       });
     },
   });
 }
 
+/* ---------- 비교 창 ---------- */
+function stampNow() {
+  const now = new Date(), p = n => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+}
+/* 같은 이름의 창을 다시 쓴다 — 비교하기를 여러 번 눌러도 비교 창은 하나다 */
+function openCompare() {
+  const w = window.open(`compare.html?base=${encodeURIComponent(state.scenario)}`, 'ebitda-compare', 'popup,width=1360,height=900');
+  if (!w) { toast('팝업이 차단되었습니다. 브라우저에서 이 사이트의 팝업을 허용해 주세요.'); return; }
+  w.focus();
+  if (state.dirty) toast('저장 전 수정값은 비교에 들어가지 않습니다.');
+}
+
+/* 프리셋을 고르면 입력 전체를 그 프리셋 값으로 바꾼다 — 수정한 값이 있으면 먼저 묻는다 */
+function pickPreset(key) {
+  if (key === state.preset && !state.dirty) return;
+  const apply = () => { applyPreset(key); state.dirty = true; renderAll(); };
+  if (state.dirty) confirmModal('입력값이 프리셋 값으로 바뀝니다. 계속할까요?', apply);
+  else apply();
+}
+
 /* ---------- 이벤트 ---------- */
-function renderAll() { renderToolbar(); renderDrivers(); renderResults(); renderBottom(); lucide.createIcons(); }
+function renderAll() { compute(); renderToolbar(); renderDrivers(); renderResults(); renderBottom(); lucide.createIcons(); }
 function rerenderResults() { renderResults(); renderBottom(); lucide.createIcons(); }
+/* 슬라이더를 끄는 동안 한 프레임에 한 번만 다시 계산한다 */
+let pending = 0;
+function recalc({ formulaTyping = false } = {}) {
+  cancelAnimationFrame(pending);
+  pending = requestAnimationFrame(() => {
+    compute(); renderResults();
+    if (formulaTyping) updateFormulaStatus(); else renderBottom();
+    lucide.createIcons();
+  });
+}
 
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-year],[data-tab],[data-toggle],#saveBtn,#newScenario,#copyScenario,#deleteScenario,#resetPreset');
+    if (!e.target.closest('#presetComboWrap')) togglePresetList(false);
+  const t = e.target.closest('#presetCombo,[data-preset-pick],[data-year],[data-toggle],[data-vol],[data-formula-reset],[data-formula-draft],#saveBtn,#compareBtn,#newScenario,#copyScenario,#deleteScenario,#resetPreset');
   if (!t) return;
-  if (t.dataset.year) { state.year = +t.dataset.year; rerenderResults(); }
-  else if (t.dataset.tab) { state.tab = t.dataset.tab; renderBottom(); lucide.createIcons(); }
-  else if (t.dataset.toggle) { state.drivers[t.dataset.toggle] = !state.drivers[t.dataset.toggle]; state.dirty = true; renderToolbar(); renderDrivers(); rerenderResults(); }
-  else if (t.id === 'saveBtn') { const s = scen(); s.version += 1; s.preset = state.preset ?? s.preset; state.dirty = false; renderToolbar(); lucide.createIcons(); toast('저장했습니다.'); }
+  if (t.id === 'presetCombo') togglePresetList();
+  else if (t.dataset.presetPick) { togglePresetList(false); pickPreset(t.dataset.presetPick); }
+  else if (t.dataset.year) { state.year = +t.dataset.year; rerenderResults(); }
+  else if (t.dataset.toggle) { state.drivers[t.dataset.toggle] = !state.drivers[t.dataset.toggle]; state.dirty = true; renderAll(); }
+  else if (t.dataset.vol) {
+    const k = 'vol.' + t.dataset.vol, v = hosp().volumes.find(x => x.key === t.dataset.vol);
+    if (state.drivers[k] != null) delete state.drivers[k]; else state.drivers[k] = annualized(v);
+    state.dirty = true; renderAll();
+  }
+  else if (t.dataset.formulaReset !== undefined) {
+    if (t.dataset.formulaReset) delete state.formulas[t.dataset.formulaReset]; else state.formulas = {};
+    renderAll();
+  }
+  else if (t.dataset.formulaDraft !== undefined) toast('수식 초안을 저장했습니다. 승인하면 모든 시나리오에 반영됩니다.');
+  else if (t.id === 'saveBtn') { const s = scen(); s.version += 1; s.preset = state.preset ?? s.preset; s.drivers = structuredClone(state.drivers); s.updatedAt = stampNow(); persistScenarios(); state.dirty = false; renderToolbar(); lucide.createIcons(); toast('저장했습니다.'); }
+  else if (t.id === 'compareBtn') openCompare();
   else if (t.id === 'newScenario') scenarioModal('new');
   else if (t.id === 'copyScenario') scenarioModal('copy');
   else if (t.id === 'deleteScenario') confirmModal(`"${esc(scen().name)}" 시나리오를 삭제합니다. 되돌릴 수 없습니다.`, () => {
     SCENARIOS[state.hid] = scenarios().filter(s => s.id !== state.scenario);
-    state.scenario = scenarios()[0].id; applyPreset(scen().preset); state.dirty = false;
-    state.compare = state.compare.filter(id => scenarios().some(s => s.id === id)); renderAll(); toast('삭제했습니다.');
+    persistScenarios();
+    state.scenario = scenarios()[0].id; loadScenario();
+    renderAll(); toast('삭제했습니다.');
   }, { okLabel: '삭제', destructive: true, title: '시나리오 삭제' });
   else if (t.id === 'resetPreset') confirmModal('입력값이 프리셋 값으로 바뀝니다. 계속할까요?', () => { applyPreset(state.preset); state.dirty = false; renderAll(); });
+});
+/* 프리셋 목록 — Esc로 닫고 위·아래 화살표로 옮긴다 */
+document.addEventListener('keydown', e => {
+  const list = document.getElementById('presetList');
+  if (!list || list.classList.contains('hidden')) return;
+  if (e.key === 'Escape') { e.stopPropagation(); togglePresetList(false); document.getElementById('presetCombo').focus(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const opts = [...list.querySelectorAll('[role="option"]')], i = opts.indexOf(document.activeElement);
+  opts[(i + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length].focus();
 });
 document.addEventListener('input', e => {
   const k = e.target.dataset.driver;
   if (k) {
-    state.drivers[k] = +e.target.value; state.dirty = true;
+    // Y5 목표·연도별 금액은 비우면 기본값으로 돌아간다
+    if (e.target.value === '' && k.includes('@5')) delete state.drivers[k];
+    else state.drivers[k] = e.target.value === '' ? null : +e.target.value;
+    state.dirty = true;
     const out = document.querySelector(`[data-value="${CSS.escape(k)}"]`), f = allFields().find(i => i.key === k);
     if (out && f) out.textContent = e.target.value + fieldUnit(f);
-    renderToolbar(); lucide.createIcons();
+    // 마케팅비율 Y5 목표의 기본값(Y1의 절반)이 함께 바뀐다
+    if (k === 'mktgRate') { const t = document.querySelector('[data-driver="mktgRate@5"]'); if (t) t.placeholder = +(+e.target.value * 0.5).toFixed(2); }
+    renderToolbar(); recalc();
   }
-  if (e.target.dataset.formula) state.editedFormula = e.target.dataset.formula;
+  const fk = e.target.dataset.formula;
+  if (fk) {
+    const v = e.target.value.trim();
+    if (!v || v === FORMULA_DEFAULTS[fk]) delete state.formulas[fk]; else state.formulas[fk] = v;
+    recalc({ formulaTyping: true });
+  }
 });
 document.addEventListener('change', e => {
   const id = e.target.id;
   if (id === 'scenarioSelect') {
-    state.scenario = e.target.value; applyPreset(scen().preset); state.dirty = false;
-    state.compare = state.compare.filter(x => x !== state.scenario); renderAll();
-  }
-  if (id === 'presetSelect') {
-    const key = e.target.value, apply = () => { applyPreset(key); state.dirty = key !== scen().preset || state.dirty; renderAll(); };
-    if (state.dirty) confirmModal('입력값이 프리셋 값으로 바뀝니다. 계속할까요?', apply);
-    else apply();
-    renderToolbar(); lucide.createIcons();
-  }
-  const c = e.target.dataset.compare;
-  if (c) {
-    state.compare = e.target.checked ? [...state.compare, c].slice(-2) : state.compare.filter(x => x !== c);
-    renderBottom(); lucide.createIcons();
+    state.scenario = e.target.value; loadScenario();
+    renderAll();
   }
   if (e.target.dataset.formula) { renderBottom(); lucide.createIcons(); }
 });

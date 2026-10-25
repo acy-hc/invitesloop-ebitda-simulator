@@ -79,11 +79,13 @@
     .btn { @apply inline-flex h-9 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-all outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0; }
     .btn-default { @apply bg-primary text-primary-foreground shadow-xs hover:bg-primary/90; }
     .btn-outline { @apply border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input; }
+    .btn-secondary { @apply bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80; }
     .btn-ghost { @apply hover:bg-accent hover:text-accent-foreground; }
     .btn-destructive { @apply bg-destructive text-white shadow-xs hover:bg-destructive/90; }
     .btn-sm { @apply h-8 gap-1.5 px-3; }
     .btn-icon { @apply size-8 px-0; }
     .badge { @apply inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap; }
+    .badge-default { @apply border-transparent bg-primary text-primary-foreground shadow-sm; }
     .badge-secondary { @apply border-transparent bg-secondary text-secondary-foreground; }
     .badge-destructive { @apply border-transparent bg-destructive text-destructive-foreground shadow-sm; }
     .badge-warning { @apply border-transparent bg-warning text-warning-foreground shadow-sm; }
@@ -109,16 +111,6 @@
   document.head.append(tokens, tw);
 })();
 
-/* ---------- VISTA 프로토타입 기준값 (tests/fixtures/prototype_v4_golden.json) ---------- */
-const GOLDEN_KEYS = ['sub','ref','fam','corpRev','commRev','labor','opex','mktg','bizdev','royalty','om','dep','tax','subscribers','medActive','totEbitda','ebit','nopat'];
-const GOLDEN = {
-  kpmg: [[411041,146561,51145,0,0,140620,133924,231324,550000,60875,30437,210000,0,4239,1798,-538433,-748433,-748433],[1166620,421219,381103,0,0,168744,433167,654673,550000,196894,98447,210000,0,9200,5698,-132984,-342984,-342984],[2537008,737996,1037766,1356800,0,421860,1247306,1615828,0,566957,283479,330000,180621,16102,11451,1534142,1204142,1023521],[4665263,1099945,2099283,2787200,0,478108,2343372,2529777,0,1065169,532585,330000,505902,24768,18876,3702681,3372681,2866779],[7684212,1510286,3653427,4291200,0,562480,3770608,3256434,0,1713913,856956,330000,997310,35074,27845,6978735,6648735,5651425]],
-  base: [[576044,244268,117417,0,0,140620,187546,187546,519000,93773,46886,210000,0,5817,2766,-237642,-447642,-447642],[1438043,500472,499314,0,0,168744,487566,426620,519000,243783,121891,210000,39034,11191,7212,470225,260225,221191],[2883014,795008,1170361,3392000,0,421860,1648077,1236058,0,824038,412019,330000,505250,18143,13160,3698332,3368332,2863082],[5031637,1130640,2196921,6968000,0,478108,3065440,1915900,0,1532720,766360,330000,1085801,26550,20485,7568671,7238671,6152870],[7998178,1510286,3653427,10728000,0,562480,4777978,2388989,0,2388989,1194495,330000,1837044,36330,29101,12576960,12246960,10409916]],
-  aggr: [[806462,341976,230138,0,0,140620,248144,206786,350000,137858,41357,210000,6572,8144,3873,253811,43811,37239],[1783036,579725,669172,0,1362659,168744,791027,576790,350000,439459,131838,210000,259010,13876,8941,1936735,1726735,1467724],[3304077,852020,1350413,4748800,8912618,421860,3450227,2156392,0,1916793,575038,330000,1547643,20760,15113,10647618,10317618,8769975],[5464460,1161336,2325792,9755200,16569760,478108,6349779,3307176,0,3527655,1058296,330000,3033830,28735,22324,20555534,20225534,17191704],[8356997,1510286,3653427,15019200,24330577,562480,9516688,3965287,0,5287049,1586115,330000,4743430,37766,30536,31952870,31622870,26879439]],
-  reg: [[411041,146561,51145,0,0,140620,133924,243499,550000,60875,30437,210000,0,4239,1798,-550608,-760608,-760608],[1166620,421219,381103,0,500488,168744,543275,864301,550000,246943,123472,210000,0,9200,5698,-27304,-237304,-237304],[2537008,737996,1037766,1017600,1691937,421860,1544908,2106692,0,702231,351115,330000,234825,16102,11451,1895501,1565501,1330676],[4665263,1099945,2099283,2090400,2979357,478108,2845535,3233562,0,1293425,646712,330000,616036,24768,18876,4436906,4106906,3490870],[7684212,1510286,3653427,3218400,4356048,562480,4492922,4084475,0,2042237,1021119,330000,1183371,35074,27845,8219140,7889140,6705769]],
-  feecut: [[411041,87937,30687,0,0,140620,116526,201272,550000,52966,26483,210000,0,4239,1798,-558204,-768204,-768204],[1166620,252732,228662,0,0,168744,362563,547965,550000,164801,82401,210000,0,9200,5698,-228460,-438460,-438460],[2537008,442798,622660,1032960,0,421860,1019794,1321096,0,463543,231771,330000,127104,16102,11451,1177362,847362,720258],[4665263,659967,1259570,2110080,0,478108,1912874,2065034,0,869488,434744,330000,390695,24768,18876,2934632,2604632,2213938],[7684212,906172,2192056,3231360,0,562480,3083036,2662622,0,1401380,700690,330000,791039,35074,27845,5603592,5273592,4482553]],
-};
-
 /* ---------- 공통 상수 ---------- */
 const COST_ITEMS = [
   { key: 'labor', label: '인건비' },
@@ -127,6 +119,7 @@ const COST_ITEMS = [
   { key: 'bizdev', label: '사업개발비' },
   { key: 'royalty', label: '로열티' },
   { key: 'om', label: '유지보수비' },
+  { key: 'hc', label: 'CAPEX 귀속' },
 ];
 const VOLUME_TYPES = [
   { key: 'OUT', label: '외래' },
@@ -164,23 +157,27 @@ const HOSPITAL_SEED = [
   {
     id: 'vista', name: 'VISTA 헬스케어', code: 'H-0001', country: '중국', currency: 'CNY', report: 'USD',
     fx: '1 USD = 7.10 CNY (2025 평균)', baseYear: 2025, locations: ['심천', '북경'], receivedAt: '2026.01.15',
+    sites: [
+      { key: 'sz', name: '심천', chronic: 8, referral: 1 },
+      { key: 'bj', name: '북경', chronic: 16, referral: 0.215 },
+    ],
     volumes: [
-      { key: 'OUT', count: 66689, from: '2025.01', to: '2025.12', months: 12 },
+      { key: 'OUT', count: 66689, from: '2025.01', to: '2025.12', months: 12, bySite: { sz: 21268, bj: 45421 } },
       { key: 'IN', count: 3912, from: '2025.04', to: '2025.12', months: 9, note: '입원 시스템 2025.04 개통' },
-      { key: 'CHK', count: 12102, from: '2025.01', to: '2025.12', months: 12 },
+      { key: 'CHK', count: 12102, from: '2025.01', to: '2025.12', months: 12, bySite: { sz: 10156, bj: 1946 } },
     ],
     revenueItems: [
       { key: 'sub', name: '구독 (Medical·Wellness)', segment: 'Medical', type: 'SUBSCRIPTION', base: 'CHK', enabled: true, fields: [
         { key: 'convMed', label: 'Medical 전환율', unit: '%', min: 0, max: 60, step: 1, ramp: 80 },
         { key: 'convWell', label: 'Wellness 전환율', unit: '%', min: 0, max: 30, step: 1, ramp: 10 },
         { key: 'appRate', label: '앱 접점률', unit: '%', min: 50, max: 100, step: 1, ramp: 100 },
-        { key: 'feeMed', label: 'Medical 구독료', unit: '/년', number: true, money: true },
-        { key: 'feeWell', label: 'Wellness 구독료', unit: '/년', number: true, money: true },
+        { key: 'feeMed', label: 'Medical 구독료', unit: '/년', number: true, money: true, ramp: 250 },
+        { key: 'feeWell', label: 'Wellness 구독료', unit: '/년', number: true, money: true, ramp: 100 },
       ] },
       { key: 'ref', name: '외래연계 수수료', segment: 'Medical', type: 'REFERRAL_FEE', base: 'OUT', enabled: true, fields: [
         { key: 'refRate', label: '외래연계율', unit: '%', min: 0, max: 80, step: 1, ramp: 80 },
         { key: 'visits', label: '연간 방문횟수', unit: '회', min: 1, max: 8, step: 1, warn: '만성질환 평균 방문 가정 — 실적 대조 전', actual: 3.6 },
-        { key: 'visitCost', label: '방문당 진료비', unit: '', number: true, money: true, warn: 'VISTA 제공 평균 진료비 미확인 — 2024 샘플 기준', actual: 262 },
+        { key: 'visitCost', label: '방문당 진료비', unit: '', number: true, money: true, warn: 'VISTA 제공 평균 진료비 미확인 — 2024 샘플 기준', actual: 262, ramp: 300 },
         { key: 'svcFee', label: 'Service Fee 요율', unit: '%', min: 10, max: 40, step: 1, note: '미서명' },
       ] },
       { key: 'fam', name: 'Family 구독', segment: 'Medical', type: 'SUBSCRIPTION', base: 'SUBS', enabled: true, fields: [
@@ -204,13 +201,15 @@ const HOSPITAL_SEED = [
       { key: 'reg', name: '규제강화', band: null, desc: '처방 커머스 불가, 확산 둔화', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5, p1: false, p2: true }, updatedBy: '김분석', updatedAt: '2026.10.11' },
       { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5, p1: false, p2: false }, updatedBy: '김분석', updatedAt: '2026.10.14' },
     ],
-    profile: { laborUnitCost: 46800, laborInflation: 5, laborInflationBasis: '심천·북경 최저임금 인상률 평균', staff: [3, 4, 9, 10, 12], royaltyRate: 8, taxRate: 15, taxLossYears: 5, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [210000, 210000, 330000, 330000, 330000], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
+    profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
     params: [
-      { key: 'OUT', chronic: 10, risk: null, referral: 1.0, growth: 3 },
-      { key: 'IN', chronic: 18, risk: null, referral: 0.6, growth: 2 },
-      { key: 'CHK', chronic: null, risk: 46.2, referral: 1.0, growth: 3 },
+      { key: 'OUT', risk: null, growth: 3 },
+      { key: 'IN', risk: null, growth: 2 },
+      { key: 'CHK', risk: 46.2, growth: 3 },
     ],
+    /* 프로토타입 고정값 — 화면에서 바꾸지 않는다 */
+    model: { corpPool: 800000, corpPenBase: [0, 0, 0.1, 0.2, 0.3], commCorpPen: 25 },
     assumptions: [
       { label: '방문당 진료비', value: '250', unit: '$', basis: '2024 샘플 기준 — VISTA 평균 진료비 미확인', verified: false, validFrom: '2026.01.01', scope: '병원' },
       { label: '연간 방문횟수', value: '4', unit: '회', basis: '만성질환 평균 방문 가정 — 실적 대조 전', verified: false, validFrom: '2026.01.01', scope: '병원' },
@@ -231,7 +230,7 @@ const SCENARIO_SEED = {
   ],
 };
 
-/* ---------- 시안 저장 — 병원 기초정보에서 바꾼 프리셋·매출 항목을 시뮬레이터가 읽게 한다 ---------- */
+/* ---------- 시안 저장 — 병원 기초정보에서 바꾼 값을 시뮬레이터가 읽게 한다 ---------- */
 const STORE_KEY = 'ebitda-mockup';
 function readStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } }
 function writeStore(s) { try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch { /* 저장소를 쓸 수 없으면 화면 안에서만 유지 */ } }
@@ -241,45 +240,24 @@ function loadHospitals() {
   return HOSPITAL_SEED.map(h => {
     const c = structuredClone(h);
     if (s[h.id]?.presets) c.presets = s[h.id].presets;
-    if (s[h.id]?.revenueItems) c.revenueItems = s[h.id].revenueItems;
+    ['revenueItems', 'profile', 'params', 'sites', 'allocation'].forEach(k => { if (s[h.id]?.[k]) c[k] = s[h.id][k]; });
     return c;
   });
 }
 function saveHospital(h) {
   const s = readStore();
-  s[h.id] = { presets: h.presets, revenueItems: h.revenueItems };
+  s[h.id] = { ...s[h.id], presets: h.presets, revenueItems: h.revenueItems, profile: h.profile, params: h.params, sites: h.sites, allocation: h.allocation };
+  writeStore(s);
+}
+/* 시나리오 목록 — 비교 창이 시뮬레이터에서 만든·저장한 시나리오를 읽는다 */
+function loadScenarios(hid) { return readStore()[hid]?.scenarios || structuredClone(SCENARIO_SEED[hid]); }
+function saveScenarios(hid, list) {
+  const s = readStore();
+  s[hid] = { ...s[hid], scenarios: list };
   writeStore(s);
 }
 
-/* ---------- 결과 데이터 ---------- */
-function finishYear(y) {
-  y.revTotal = Object.values(y.rev).reduce((a, b) => a + b, 0);
-  y.costTotal = Object.values(y.cost).reduce((a, b) => a + b, 0);
-  if (y.ebitda == null) y.ebitda = y.revTotal - y.costTotal;
-  y.capex = y.dep;
-  y.fcf = y.nopat;
-  return y;
-}
-
-function vistaYears(key) {
-  return GOLDEN[key].map(row => {
-    const g = Object.fromEntries(GOLDEN_KEYS.map((k, i) => [k, row[i]]));
-    // EBITDA·EBIT·세후이익은 기준값을 그대로 쓴다 — 항목 합계와 반올림 차이(1~2달러)가 날 수 있다
-    return finishYear({
-      rev: { sub: g.sub, ref: g.ref, fam: g.fam, corpRev: g.corpRev, commRev: g.commRev },
-      cost: { labor: g.labor, opex: g.opex, mktg: g.mktg, bizdev: g.bizdev, royalty: g.royalty, om: g.om },
-      ebitda: g.totEbitda, dep: g.dep, ebit: g.ebit, tax: g.tax, nopat: g.nopat,
-      subscribers: g.subscribers, medActive: g.medActive,
-    });
-  });
-}
-
-function yearsFor(h, presetKey) {
-  const p = h.presets.find(x => x.key === presetKey) || h.presets[0];
-  const base = p ? (p.basedOn || p.key) : null;
-  return vistaYears(GOLDEN[base] ? base : 'kpmg');
-}
-
+/* ---------- 기업가치 ---------- */
 function valuation(years, wacc, growth) {
   const w = wacc / 100, g = growth / 100;
   if (w <= g) return null;
@@ -397,9 +375,10 @@ function sparkBars(values, slots = 12, w = 120, h = 28) {
   }).join('')}</svg>`;
 }
 
-/* 차트 아래 연도별 데이터 표 — rows: { label, values, kind: 'total'|'key'|'pct'|'sub', swatch, badge, fmt } */
+/* 차트 아래 연도별 데이터 표 — rows: { label, values, kind: 'total'|'key'|'pct'|'sub', swatch, badge, fmt, change: false면 Y1→Y5 칸을 비운다 } */
 function yearTable({ rows, selected, baseYear = 2025, change = true }) {
   const changeCell = r => {
+    if (r.change === false) return '';
     const a = r.values[0], b = r.values[4];
     if (r.kind === 'pct') return `${b - a >= 0 ? '+' : ''}${((b - a) * 100).toFixed(1)}%p`;
     if (a > 0 && b > 0) return `연 ${(Math.pow(b / a, 1 / 4) - 1) * 100 >= 0 ? '+' : ''}${((Math.pow(b / a, 1 / 4) - 1) * 100).toFixed(0)}%`;
@@ -422,12 +401,13 @@ function yearTable({ rows, selected, baseYear = 2025, change = true }) {
 }
 
 /* ---------- 셸: 사이드바·헤더·페이지 제목 (features/shell) ---------- */
-function mountShell({ active, title, footer }) {
+/* guide: 사용 가이드를 열 절. 주면 제목 옆에 가이드 버튼을 둔다 */
+function mountShell({ active, title, footer, guide }) {
   const nav = [
     { key: 'simulator', label: '시뮬레이터', icon: 'calculator', href: 'simulator.html' },
     { key: 'hospital', label: '병원 기초정보', icon: 'hospital', href: 'hospital.html' },
-    { key: 'guide', label: '사용 가이드', icon: 'book-open', href: 'guide.html' },
   ];
+  const navCls = 'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium';
   document.body.innerHTML = `
   <div class="min-h-screen bg-background">
     <aside class="fixed start-0 top-0 z-40 hidden h-screen w-[260px] flex-col border-e border-sidebar-border bg-sidebar lg:flex">
@@ -439,8 +419,8 @@ function mountShell({ active, title, footer }) {
         <div>
           <div class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-sidebar-foreground/70"><span class="flex-1">EBITDA 시뮬레이터</span><i data-lucide="chevron-down" class="size-3"></i></div>
           <div class="mt-1 space-y-0.5">${nav.map(n => n.key === active
-            ? `<a href="${n.href}" aria-current="page" class="relative flex items-center gap-3 rounded-lg bg-sidebar-accent px-3 py-2 text-sm font-medium text-sidebar-primary"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-primary"></i><span class="flex-1">${n.label}</span></a>`
-            : `<a href="${n.href}" class="relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-all hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-foreground/50"></i><span class="flex-1">${n.label}</span></a>`).join('')}
+            ? `<a href="${n.href}" aria-current="page" class="${navCls} bg-sidebar-accent text-sidebar-primary"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-primary"></i><span class="flex-1">${n.label}</span></a>`
+            : `<a href="${n.href}" class="${navCls} text-sidebar-foreground/70 transition-all hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-foreground/50"></i><span class="flex-1">${n.label}</span></a>`).join('')}
           </div>
         </div>
       </nav>
@@ -465,7 +445,7 @@ function mountShell({ active, title, footer }) {
       </header>
       <main id="main-content" class="min-w-0 flex-1 p-4 sm:p-6">
         <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-bold tracking-tight">${title}</h1>${active === 'guide' ? '' : `<a href="guide.html#${active}" class="btn btn-outline btn-sm"><i data-lucide="book-open"></i>사용 가이드</a>`}</div>
+          <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-bold tracking-tight">${title}</h1>${guide ? `<button type="button" data-guide="${guide}" class="btn btn-outline btn-sm" title="사용 가이드 (?)"><i data-lucide="book-open"></i>사용 가이드</button>` : ''}</div>
           <nav aria-label="breadcrumb" class="flex items-center gap-1.5 text-sm text-muted-foreground"><span>EBITDA 시뮬레이터</span><i data-lucide="chevron-right" class="size-3.5"></i><span class="text-foreground">${title}</span></nav>
         </div>
         <div id="page" class="space-y-6"></div>
@@ -477,16 +457,49 @@ function mountShell({ active, title, footer }) {
     </div>
   </div>`;
   initTooltip();
+  if (guide) initGuideTriggers();
   document.getElementById('themeToggle').addEventListener('click', () => document.documentElement.classList.toggle('dark'));
   document.getElementById('resetMockup').addEventListener('click', () => { resetStore(); location.reload(); });
   return document.getElementById('page');
 }
 
+/* 새 창 화면 — 사이드바 없이 제목 줄과 본문만 그린다 */
+function mountPopup({ title, desc, guide }) {
+  document.body.innerHTML = `
+  <div class="min-h-screen bg-background">
+    <header class="sticky top-0 z-30 flex min-h-16 flex-wrap items-center justify-between gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur-xl sm:px-6">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-white"><i data-lucide="git-compare" class="size-4"></i></div>
+        <div class="min-w-0"><h1 class="truncate text-lg font-bold tracking-tight">${title}</h1><p id="popupDesc" class="truncate text-xs text-muted-foreground">${desc}</p></div>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <button type="button" data-guide="${guide}" class="btn btn-ghost btn-sm" title="사용 가이드 (?)"><i data-lucide="book-open"></i><span class="hidden sm:inline">사용 가이드</span></button>
+        <button type="button" id="closeWindow" class="btn btn-outline btn-sm"><i data-lucide="x"></i>창 닫기</button>
+      </div>
+    </header>
+    <main class="p-4 sm:p-6"><div id="page" class="mx-auto max-w-[1400px] space-y-6"></div></main>
+  </div>`;
+  initTooltip();
+  initGuideTriggers();
+  document.getElementById('closeWindow').addEventListener('click', () => window.close());
+  return document.getElementById('page');
+}
+
+/* 사용 가이드 팝업 — 가이드 버튼이나 ? 키로 연다 */
+function initGuideTriggers() {
+  document.addEventListener('click', e => { const t = e.target.closest('[data-guide]'); if (t) openGuide(t.dataset.guide); });
+  document.addEventListener('keydown', e => {
+    if (e.key !== '?' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest('input,textarea,select,[contenteditable="true"]') || document.querySelector('[role="dialog"]')) return;
+    e.preventDefault(); openGuide(document.querySelector('[data-guide]')?.dataset.guide);
+  });
+}
+
 /* ---------- 모달 (features/common/components/Modal) ---------- */
-function openModal({ title, desc = '', body, footer, size = 'max-w-lg', onMount }) {
+function openModal({ title, desc = '', body, footer, size = 'max-w-lg', height = 'max-h-[90vh]', autofocus = true, onMount }) {
   const wrap = document.createElement('div');
   wrap.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4';
-  wrap.innerHTML = `<div role="dialog" aria-modal="true" aria-label="${esc(title)}" class="flex max-h-[90vh] w-full ${size} flex-col rounded-xl border bg-card text-card-foreground shadow-lg">
+  wrap.innerHTML = `<div role="dialog" aria-modal="true" aria-label="${esc(title)}" class="flex ${height} w-full ${size} flex-col rounded-xl border bg-card text-card-foreground shadow-lg">
     <div class="flex items-start justify-between gap-4 p-6 pb-4"><div class="space-y-1.5"><h2 class="text-lg leading-none font-semibold">${title}</h2>${desc ? `<p class="text-sm text-muted-foreground">${desc}</p>` : ''}</div>
       <button type="button" data-close class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="닫기"><i data-lucide="x" class="size-4"></i></button></div>
     <div class="min-h-0 flex-1 overflow-y-auto px-6 pb-2">${body}</div>
@@ -497,7 +510,7 @@ function openModal({ title, desc = '', body, footer, size = 'max-w-lg', onMount 
   document.addEventListener('keydown', onKey);
   document.body.append(wrap);
   lucide.createIcons();
-  wrap.querySelector('input,textarea,select')?.focus();
+  if (autofocus) wrap.querySelector('input,textarea,select')?.focus();
   onMount?.(wrap, close);
   return { el: wrap, close };
 }
@@ -527,9 +540,9 @@ const FIELD_HELP = {
   convMed: '건강검진 위험군 중 앱에 접속한 사람이 Medical 구독으로 넘어오는 비율입니다. Y1 값에서 Y5 목표까지 매년 같은 폭으로 오릅니다.',
   convWell: '건강검진 정상군 중 앱에 접속한 사람이 Wellness 구독으로 넘어오는 비율입니다.',
   appRate: '건강검진 수검자 중 앱을 설치·접속하는 비율입니다. 전환율은 이 인원을 기준으로 계산합니다.',
-  feeMed: 'Medical 구독자 1명이 1년에 내는 구독료입니다.',
-  feeWell: 'Wellness 구독자 1명이 1년에 내는 구독료입니다.',
-  refRate: '외래 환자 중 연계 진료로 이어지는 비율입니다.',
+  feeMed: 'Medical 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.',
+  feeWell: 'Wellness 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.',
+  refRate: '건강검진 위험군 중 외래 연계 진료로 이어지는 비율입니다. 거점별 연계 계수를 곱한 값이 거점의 Y1 연계율입니다.',
   visits: '연계 환자 1명이 1년에 방문하는 횟수입니다. "실적값 사용"을 켜면 병원 실적 평균으로 바꿉니다.',
   visitCost: '연계 환자의 1회 방문당 평균 진료비입니다. 수수료는 이 금액에 요율을 곱해 계산합니다.',
   svcFee: '연계 진료비 중 수수료로 받는 비율입니다. 계약 서명 전이라 협상안 값입니다.',
@@ -540,7 +553,7 @@ const FIELD_HELP = {
   p2: '한국 화장품·건강식품 커머스(K-Commerce)를 켭니다. 커머스 매출은 Y2부터 생깁니다.',
   coachFee: 'JITAI 맞춤 코칭을 쓰는 구독자의 월 이용료입니다.',
   opexRate: '매출 대비 운영비 비율입니다.',
-  mktgRate: '매출 대비 마케팅·고객획득비용(CAC)·간접비 비율입니다. Y1은 이 값의 50%에서 시작합니다.',
+  mktgRate: '매출 대비 마케팅·고객획득비용(CAC)·간접비 비율입니다. Y1은 이 값에서 시작해 Y5 목표(기본은 절반)까지 매년 같은 폭으로 줄어듭니다.',
   bizdevK: '사업 초기(Y1~Y2)에만 드는 사업개발비입니다. 단위는 천 달러입니다.',
   omRate: '매출 대비 시스템 유지보수비 비율입니다.',
   reservoir: '구독자를 해마다 누적하고 이탈률만큼 빼는 계산입니다. 끄면 그해 신규 전환자만 매출에 반영합니다.',
@@ -581,7 +594,7 @@ const GLOSSARY = {
   '기반 인원': '매출 항목을 계산할 때 출발점이 되는 인원입니다. 외래·입원·건강검진 인원, 활성 구독자, 기업 대상 인원 중 하나입니다.',
   '산출 방식': '매출 항목의 계산 방식입니다. 방식에 따라 시뮬레이터에 나오는 입력 항목이 정해집니다.',
   부문: 'Medical(진료·구독)과 Commerce(커머스)로 매출과 비용을 나눠 봅니다.',
-  'Y5 목표': '값이 Y1에서 시작해 Y5에 이 목표에 닿도록 매년 같은 폭으로 바뀝니다. 비워 두면 5년 동안 같은 값을 씁니다.',
+  'Y5 목표': '값이 Y1에서 시작해 Y5에 이 목표에 닿도록 매년 같은 폭으로 바뀝니다. 비워 두면 회색으로 보이는 기본 목표를 씁니다.',
   '미검증 가정': '병원 실적이나 계약으로 확인되지 않은 입력입니다. ⚠로 표시하고 가정·가드레일에 모아 보여 줍니다.',
   '실적값 사용': '켜면 가정값 대신 병원 실적으로 계산한 값을 씁니다.',
   '직접 입력': '켜면 병원 실적 대신 직접 입력한 인원으로 계산합니다.',

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>시나리오 비교 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
+<script src="shared.js"></script>
+<script src="engine.js"></script>
+<script src="guide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<script>
+const HID = 'vista';
+let H = loadHospitals().find(h => h.id === HID);
+let SCENARIOS = loadScenarios(HID);
+useCurrency(H);
+
+const page = mountPopup({ title: '시나리오 비교', desc: '', guide: 'compare' });
+const MAX_OTHERS = 3;
+
+const METRICS = [
+  { key: 'revTotal', label: '매출', get: y => y.revTotal },
+  { key: 'ebitda', label: 'EBITDA', get: y => y.ebitda },
+  { key: 'margin', label: 'EBITDA 마진', get: y => y.revTotal ? y.ebitda / y.revTotal : 0, pct: true },
+  { key: 'nopat', label: '세후이익', get: y => y.nopat },
+  { key: 'subscribers', label: '활성 구독자', get: y => y.subscribers, count: true },
+];
+
+/* 입력값 차이 표의 행 — 매출 항목 입력은 병원 데이터에서, 나머지는 시뮬레이터 입력판 순서대로 */
+const driverRows = () => [
+  ...H.revenueItems.filter(i => i.enabled).flatMap(i => [
+    ...(i.toggle ? [{ key: i.toggle, label: `${i.name} 사용`, group: i.name, toggle: true }] : []),
+    ...i.fields.map(f => ({ ...f, group: i.name })),
+  ]),
+  ...[['opexRate', '운영비율', '%'], ['mktgRate', '마케팅·CAC·간접비', '%'], ['bizdevK', '초기사업개발비', '천$'], ['omRate', '유지보수비', '%']].map(([key, label, unit]) => ({ key, label, unit, group: '비용' })),
+  ...[['reservoir', '구독자 누적 사용', null, true], ['churn0', '기본 이탈률', '%'], ['rpmAdopt', 'RPM 침투율', '%'], ['rpmDelta', 'RPM 이탈감소 효과 δ', '%']].map(([key, label, unit, toggle]) => ({ key, label, unit, toggle, group: '구독자 누적' })),
+  { key: 'hcAttr', label: 'CAPEX를 EBITDA 비용에 포함', toggle: true, group: '기타' },
+  ...H.volumes.map(v => ({ key: 'vol.' + v.key, label: `${VOLUME_TYPES.find(t => t.key === v.key).label} 직접 입력`, unit: '명', group: '환자 기반' })),
+];
+/* Y5 목표는 입력값 바로 아래 행으로 붙인다 */
+const withTargets = rows => rows.flatMap(f => (f.ramp != null || f.key === 'mktgRate' ? [f, { ...f, key: f.key + '@5', label: `${f.label} Y5 목표`, target: true }] : [f]));
+
+const params = new URLSearchParams(location.search);
+const state = { base: null, others: [], year: 5, metric: 'ebitda', showAll: false };
+function pickDefaults(base) {
+  state.base = SCENARIOS.some(s => s.id === base) ? base : SCENARIOS[0].id;
+  const rest = SCENARIOS.filter(s => s.id !== state.base);
+  state.others = rest.slice(0, 2).map(s => s.id);
+}
+pickDefaults(params.get('base'));
+
+const byId = id => SCENARIOS.find(s => s.id === id);
+const presetOf = key => H.presets.find(p => p.key === key);
+const cols = () => [state.base, ...state.others].map(byId).filter(Boolean).map((s, k) => {
+  const drivers = scenarioDrivers(H, s), years = runModel(H, drivers).years;
+  return { s, k, years, val: valuation(years, H.profile.wacc, H.profile.growth), drivers };
+});
+
+const fmtMetric = m => v => m.pct ? F.pct(v) : m.count ? F.int(v) : F.table(v);
+const shortMetric = m => v => m.pct ? F.pct(v) : m.count ? F.int(v) : F.short(v);
+const diffText = (m, d) => {
+  if (Math.abs(d) < 1e-9) return '<span class="text-muted-foreground">기준과 같음</span>';
+  const s = d > 0 ? '+' : '-', a = Math.abs(d);
+  const txt = m.pct ? `${s}${(a * 100).toFixed(1)}%p` : m.count ? `${s}${F.int(a)}` : `${s}${F.short(a).replace('-', '')}`;
+  return `<span class="${d < 0 ? 'text-destructive' : 'text-success'}">${txt}</span>`;
+};
+const driverText = (f, v) => {
+  if (f.toggle) return v ? '켬' : '끔';
+  if (typeof v === 'number') v = +v.toFixed(2);
+  if (v == null) return f.key.startsWith('vol.') ? '실적' : '-';
+  return f.money ? `${CUR.sym}${v}${f.unit || ''}` : `${v}${f.unit || ''}`;
+};
+
+/* ---------- 그리기 ---------- */
+function render() {
+  document.getElementById('popupDesc').textContent = `${H.name} · 기준연도 ${H.baseYear} · ${CUR.code} · 저장된 시나리오 기준`;
+  const cs = cols(), base = cs[0], m = METRICS.find(x => x.key === state.metric), yi = state.year - 1;
+
+  const picker = `<section class="card"><div class="flex flex-col gap-4 p-6 lg:flex-row lg:items-start">
+    <label class="space-y-1.5 lg:w-72"><span class="label flex items-center gap-1.5">기준 시나리오${tip('차이는 모두 이 시나리오를 기준으로 계산합니다. 비교하기를 누를 때 시뮬레이터에서 보던 시나리오가 기준이 됩니다.')}</span>
+      <select id="baseSelect" class="select">${SCENARIOS.map(s => `<option value="${s.id}" ${s.id === state.base ? 'selected' : ''}>${esc(s.name)} · v${s.version}</option>`).join('')}</select></label>
+    <fieldset class="min-w-0 flex-1 space-y-1.5"><legend class="label mb-1.5 flex items-center gap-1.5">비교 대상 <span class="font-normal text-muted-foreground">(${state.others.length}/${MAX_OTHERS})</span>${tip(`기준과 함께 볼 시나리오를 ${MAX_OTHERS}개까지 고릅니다. 모두 같은 계산엔진과 승인된 수식으로 다시 계산합니다.`)}</legend>
+      <div class="flex flex-wrap gap-2">${SCENARIOS.filter(s => s.id !== state.base).map(s => {
+        const on = state.others.includes(s.id), k = state.others.indexOf(s.id) + 1, full = !on && state.others.length >= MAX_OTHERS;
+        return `<button type="button" data-other="${s.id}" aria-pressed="${on}" ${full ? 'disabled title="비교 대상은 3개까지입니다"' : ''} class="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm transition-colors disabled:opacity-50 ${on ? 'border-primary bg-accent/60 font-medium' : 'hover:bg-accent/40'}">
+          ${on ? `<span class="size-2.5 rounded-sm" style="background:${tone(k)}"></span>` : '<i data-lucide="plus" class="size-3.5 text-muted-foreground"></i>'}${esc(s.name)}<span class="text-xs font-normal text-muted-foreground">${esc(presetOf(s.preset)?.name ?? '')}</span></button>`;
+      }).join('')}</div></fieldset>
+    <div class="space-y-1.5"><span class="label">연도</span><div class="tabs-list" role="tablist" aria-label="연도">${YEARS.map(n => `<button type="button" class="tabs-trigger" role="tab" data-year="${n}" data-state="${state.year === n ? 'active' : 'inactive'}" title="${H.baseYear + n}">Y${n}</button>`).join('')}</div></div>
+  </div></section>`;
+
+  const summary = `<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">${cs.map(c => {
+    const y = c.years[yi], by = base.years[yi], p = presetOf(c.s.preset);
+    const row = (label, v, bv, mm, help) => `<div class="flex items-baseline justify-between gap-2"><span class="flex items-center gap-1 text-sm text-muted-foreground">${label}${help}</span><span class="text-end"><span class="font-semibold tabular-nums">${v == null ? '-' : shortMetric(mm)(v)}</span>${c.k && v != null && bv != null ? `<span class="block text-xs tabular-nums">${diffText(mm, v - bv)}</span>` : ''}</span></div>`;
+    return `<section class="card ${c.k === 0 ? 'ring-2 ring-primary/40' : ''}"><div class="space-y-3 p-5">
+      <div class="space-y-1"><div class="flex items-center gap-2"><span class="size-2.5 shrink-0 rounded-sm" style="background:${tone(c.k)}"></span><span class="truncate font-semibold">${esc(c.s.name)}</span>${c.k === 0 ? '<span class="badge badge-default">기준</span>' : ''}</div>
+        <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"><span class="badge badge-outline">${esc(p?.name ?? '프리셋 없음')}</span>${bandBadge(p?.band)}<span>v${c.s.version} · ${c.s.updatedAt}</span></div></div>
+      <div class="space-y-2 border-t pt-3">
+        ${row(`매출 Y${state.year}`, y.revTotal, by.revTotal, METRICS[0], '')}
+        ${row(`EBITDA Y${state.year}`, y.ebitda, by.ebitda, METRICS[1], term('EBITDA'))}
+        ${row('EV', c.val?.ev, base.val?.ev, METRICS[1], term('EV'))}
+      </div></div></section>`;
+  }).join('')}</div>`;
+
+  const series = cs.map(c => ({ name: c.s.name, values: c.years.map(m.get), color: tone(c.k) }));
+  const rows = cs.flatMap(c => [
+    { label: esc(c.s.name) + (c.k === 0 ? ' <span class="badge badge-default ms-1">기준</span>' : ''), values: c.years.map(m.get), swatch: tone(c.k), kind: m.pct ? 'pct' : undefined, fmt: fmtMetric(m) },
+    ...(c.k ? [{ label: '기준 대비', kind: 'sub', change: false, values: c.years.map((y, i) => m.get(y) - m.get(base.years[i])), fmt: v => diffText(m, v) }] : []),
+  ]);
+  const trend = `<section class="card"><div class="card-header flex-row flex-wrap items-start justify-between gap-3 pb-4">
+      <div class="space-y-1.5"><h2 class="card-title flex items-center gap-1.5">5년 추이${tip('지표 탭을 바꿔 시나리오별 5년 추이를 봅니다. 그래프의 연도 영역이나 표의 연도를 누르면 그 연도가 선택됩니다.')}</h2><p class="card-desc">${m.label}${m.pct ? '' : m.count ? ' · 명' : ` · ${CUR.unit}`}</p></div>
+      <div class="tabs-list" role="tablist" aria-label="지표">${METRICS.map(x => `<button type="button" class="tabs-trigger" role="tab" data-metric="${x.key}" data-state="${x.key === state.metric ? 'active' : 'inactive'}">${x.label}</button>`).join('')}</div>
+    </div><div class="card-content space-y-4">
+      ${legend(series.map(s => ({ name: s.name, color: s.color, line: true })))}
+      <div class="mx-auto max-w-[920px]">${chart({ baseYear: H.baseYear, selected: state.year, lines: series, fmt: shortMetric(m) })}</div>
+      <div class="border-t pt-2">${yearTable({ rows, selected: state.year, baseYear: H.baseYear })}</div>
+    </div></section>`;
+
+  const valOf = (c, f) => f.target ? +rampTarget(H, c.drivers, f.key.slice(0, -2), driverValue(H, c.drivers, f.key.slice(0, -2))).toFixed(2) : f.key.startsWith('vol.') ? c.drivers[f.key] ?? null : driverValue(H, c.drivers, f.key);
+  const all = withTargets(driverRows()).map(f => ({ f, vals: cs.map(c => valOf(c, f)) }));
+  const changed = all.filter(r => r.vals.some(v => v !== r.vals[0]));
+  const shown = state.showAll ? all : changed;
+  let lastGroup = null;
+  const diffBody = shown.map(({ f, vals }) => {
+    const head = f.group !== lastGroup ? `<tr class="bg-muted/50"><td class="td text-xs font-semibold text-muted-foreground" colspan="${cs.length + 1}">${esc(f.group)}</td></tr>` : '';
+    lastGroup = f.group;
+    return head + `<tr class="border-b last:border-0"><td class="td"><span class="flex items-center gap-1.5">${f.label}${f.target || f.key.startsWith('vol.') ? '' : tip(fieldHelp(f), f.label)}${f.warn ? '<span class="badge badge-destructive px-1.5 py-0">⚠</span>' : ''}</span></td>
+      ${vals.map((v, k) => `<td class="td num ${k && v !== vals[0] ? 'bg-warning/15 font-semibold' : ''}">${driverText(f, v)}</td>`).join('')}</tr>`;
+  }).join('');
+  const diff = `<section class="card"><div class="card-header flex-row flex-wrap items-start justify-between gap-3">
+      <div class="space-y-1.5"><h2 class="card-title flex items-center gap-1.5">입력값 차이${tip('시나리오의 입력값을 나란히 놓습니다. 기준과 다른 칸은 색으로 표시합니다.')}</h2><p class="card-desc">시나리오끼리 다른 입력 ${changed.length}개 · 전체 ${all.length}개</p></div>
+      <label class="flex items-center gap-2 text-sm">모든 입력 보기${switchHtml(state.showAll, 'id="showAll"')}</label>
+    </div><div class="card-content">${shown.length ? `<div class="overflow-x-auto"><table class="w-full min-w-[620px] text-sm"><thead><tr class="border-b"><th class="th">입력</th>${cs.map(c => `<th class="th num"><span class="inline-flex items-center gap-1.5"><span class="size-2.5 rounded-sm" style="background:${tone(c.k)}"></span>${esc(c.s.name)}</span></th>`).join('')}</tr></thead><tbody>${diffBody}</tbody></table></div>` : '<p class="text-sm text-muted-foreground">고른 시나리오의 입력값이 모두 같습니다.</p>'}</div></section>`;
+
+  page.innerHTML = picker + summary + trend + diff;
+  lucide.createIcons();
+}
+
+/* ---------- 이벤트 ---------- */
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-other],[data-year],[data-metric],#showAll');
+  if (!t) return;
+  if (t.dataset.other) { const id = t.dataset.other; state.others = state.others.includes(id) ? state.others.filter(x => x !== id) : [...state.others, id].slice(0, MAX_OTHERS); }
+  else if (t.dataset.year) state.year = +t.dataset.year;
+  else if (t.dataset.metric) state.metric = t.dataset.metric;
+  else if (t.id === 'showAll') state.showAll = !state.showAll;
+  render();
+});
+document.addEventListener('change', e => {
+  if (e.target.id !== 'baseSelect') return;
+  const prev = state.base;
+  state.base = e.target.value;
+  state.others = state.others.map(x => (x === state.base ? prev : x));
+  render();
+});
+/* 시뮬레이터 창에서 시나리오를 저장·추가·삭제하면 바로 다시 그린다 */
+window.addEventListener('storage', e => {
+  if (e.key !== STORE_KEY) return;
+  H = loadHospitals().find(h => h.id === HID);
+  SCENARIOS = loadScenarios(HID);
+  if (!byId(state.base)) pickDefaults(null);
+  state.others = state.others.filter(byId);
+  render(); toast('시뮬레이터의 변경을 반영했습니다.');
+});
+
+render();
+</script>
+</body>
+</html>
