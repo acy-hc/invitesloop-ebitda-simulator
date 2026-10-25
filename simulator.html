@@ -13,6 +13,9 @@
 </head>
 <body>
 <script>
+/* 수식 카드 — 지금은 화면에 보이지 않는다. 계산은 기본식으로 한다 */
+const SHOW_FORMULAS = false;
+
 const page = mountShell({
   active: 'simulator', title: '시뮬레이터', guide: 'simulator',
   footer: '시안 + 프로토타입 — 결과는 이 화면 안에서 계산합니다. 병원 기초정보 기본값과 프리셋 입력이면 프로토타입(vista_v4) 기준값과 같은 결과가 나옵니다.',
@@ -49,11 +52,10 @@ page.innerHTML = `
     </section>
     <div class="min-w-0 space-y-6" id="resultPanel"></div>
   </div>
-
-  <section class="card">
+  ${SHOW_FORMULAS ? `<section class="card">
     <div class="card-header"><h2 class="card-title flex items-center gap-1.5">수식${term('수식 세트')}</h2><p class="card-desc">계산에 쓰는 수식입니다. 초안으로 저장한 뒤 승인해야 반영됩니다.</p></div>
     <div class="card-content" id="bottomTab"></div>
-  </section>`;
+  </section>` : ''}`;
 
 /* ---------- 데이터·상태 ---------- */
 const HOSPITALS = loadHospitals();
@@ -374,6 +376,7 @@ function tracesOf(key) {
 }
 function renderBottom() {
   const el = document.getElementById('bottomTab'), h = hosp();
+  if (!el) return;
   const edited = Object.keys(state.formulas), errors = model.ctx.errors;
   el.innerHTML = `<div class="space-y-4">
     <div class="flex flex-wrap items-end justify-between gap-3">

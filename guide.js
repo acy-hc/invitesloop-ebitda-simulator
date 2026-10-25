@@ -27,7 +27,6 @@ const GUIDE_SIM_AREAS = [
   ['핵심 지표', '선택 연도의 매출·EBITDA·세후이익·활성 구독자와 5년 추이선, EBITDA 밴드.'],
   ['추이 그래프 + 표', '5년 손익, 매출 항목별, 비용 항목별 추이. 그래프 바로 아래 표에 같은 숫자와 Y1→Y5 연평균 증가율이 있습니다.'],
   ['EBITDA 구성·기업가치', '선택 연도의 EBITDA가 만들어지는 과정, EV와 민감도 표. 아래에 상세 손익표와 가정·가드레일이 접혀 있습니다.'],
-  ['수식', '계산에 쓰는 수식과 선택 연도의 대입값. 수식을 고치면 이 화면 결과로 바로 계산해 볼 수 있고, 승인해야 저장한 시나리오와 비교 창에 반영됩니다.'],
 ];
 
 const GUIDE_COMPARE = [
@@ -53,7 +52,6 @@ const GUIDE_FAQ = [
   ['매출 항목을 끄면 입력한 값이 지워지나요?', '지워지지 않습니다. 시뮬레이터에서 보이지 않고 계산에서 빠질 뿐이며, 다시 켜면 이전 값으로 돌아옵니다.'],
   ['EBITDA 밴드가 보이지 않아요.', '하한(보수)과 상한(공격) 프리셋이 모두 있어야 보입니다. 병원 기초정보 > 시나리오 프리셋에서 밴드 역할을 지정하세요.'],
   ['잔존가치 경고는 무엇인가요?', '기업가치의 70% 이상이 Y5 이후 가치에서 나온다는 뜻입니다. WACC·영구성장률을 조금만 바꿔도 EV가 크게 변하므로 민감도 표를 함께 보세요.'],
-  ['수식을 바꾸면 바로 반영되나요?', '고친 수식은 시뮬레이터 화면의 결과에 바로 계산해 볼 수 있습니다. 저장한 시나리오와 비교 창은 초안을 저장하고 승인한 뒤에 바뀝니다. 틀린 수식은 기본식으로 계산하고 오류를 표시합니다.'],
 ];
 
 function guideHtml(H) {
@@ -82,7 +80,6 @@ function guideHtml(H) {
       <div class="flex min-h-36 items-start gap-2 rounded-md border bg-card p-2"><b class="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">3</b>입력판</div>
       <div class="grid gap-2">${box(4, '핵심 지표')}${box(5, '그래프 → 표 (×3)')}${box(6, 'EBITDA 구성 · EV')}</div>
     </div>
-    ${box(7, '수식')}
   </div>`;
   const simBody = `<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">${simWire}${areaList(GUIDE_SIM_AREAS)}</div>
     <div class="grid gap-3 md:grid-cols-3">
@@ -125,7 +122,7 @@ function guideHtml(H) {
     <div class="min-w-0 space-y-8 pb-4">
       ${sec('overview', '이 화면으로 하는 일', `${esc(H.name)}의 실적을 바탕으로 시나리오별 5개년 EBITDA와 기업가치를 계산합니다.`, overview)}
       ${sec('start', '처음 쓰는 순서', '병원 기초정보를 먼저 확인하고 시뮬레이터에서 시나리오를 만듭니다.', steps)}
-      ${sec('simulator', '시뮬레이터', '화면은 위에서 아래로 시나리오 → 입력 → 결과 → 수식 순서입니다.', simBody)}
+      ${sec('simulator', '시뮬레이터', '화면은 위에서 아래로 시나리오 → 입력 → 결과 순서입니다.', simBody)}
       ${sec('compare', '시나리오 비교', '시뮬레이터의 시나리오 선택 옆 <b>비교하기</b>를 누르면 새 창으로 열립니다. 시뮬레이터와 나란히 두고 볼 수 있습니다.', cmpBody)}
       ${sec('hospital', '병원 기초정보', '시나리오가 함께 쓰는 고정 정보입니다. 병원 시스템이 주는 정보는 읽기만 할 수 있습니다.', hosBody)}
       ${sec('fields', '입력 항목 설명', '시뮬레이터 입력판의 각 항목입니다. 입력판의 물음표 아이콘에도 같은 설명이 나옵니다.', fieldsBody)}
