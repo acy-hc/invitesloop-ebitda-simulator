@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>성과 설정 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
+<script src="shared.js"></script>
+<script src="engine.js"></script>
+<script src="kpi-engine.js"></script>
+<script src="perf-data.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<script>
+const page = mountShell({
+  active: 'kpi-setting', title: '성과 설정',
+  footer: '시안 — 이 화면에서 저장한 KPI·목표·데이터 항목·데이터 값은 이 브라우저에 저장되고 병원정보 화면 계산에 바로 쓰입니다. 데이터는 VISTA 예시값입니다.',
+});
+
+const TABS = [
+  { key: 'input', label: '데이터 입력', icon: 'table-2', help: '연동하지 않는 데이터를 주·월 단위로 입력합니다.' },
+  { key: 'kpis', label: 'KPI 항목', icon: 'list-checks', help: '병원정보에서 볼 KPI와 계산식, EBITDA 환산 방식을 정합니다.' },
+  { key: 'targets', label: '기준·목표', icon: 'flag', help: 'KPI마다 기준값과 목표값, 목표 시점을 정합니다.' },
+  { key: 'items', label: '데이터 항목', icon: 'database', help: '병원에서 받는 원자료와 수집 방식을 정합니다.' },
+];
+const HID = 'vista';
+const H = loadHospitals().find(h => h.id === HID);
+useCurrency(H);
+let P = loadPerf(HID);
+const persist = () => savePerf(HID, P);
+const fx = year => fxRate(H, year);
+
+const hashTab = location.hash.slice(1);
+const state = { tab: TABS.some(t => t.key === hashTab) ? hashTab : 'input', role: 'CUSTOMER_ADMIN', cycle: 'MONTH', end: { MONTH: LATEST_MONTH, WEEK: '2026-W40', QUARTER: '2026Q3' }, edits: {} };
+const canEdit = () => state.role !== 'CUSTOMER_DEVELOPER';   // 설정 편집·보정 (D31)
+const itemOf = k => P.items.find(i => i.key === k);
+const kpiOf = k => P.kpis.find(x => x.key === k);
+const stampNow = () => { const n = new Date(), p = x => String(x).padStart(2, '0'); return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())} ${p(n.getHours())}:${p(n.getMinutes())}`; };
+const card = (title, desc, body, right = '', help = '') => `<section class="card"><div class="card-header flex-row flex-wrap items-start justify-between gap-3"><div class="space-y-1.5"><h2 class="card-title flex items-center gap-1.5">${title}${tip(help)}</h2>${desc ? `<p class="card-desc">${desc}</p>` : ''}</div><div class="flex flex-wrap items-center gap-2">${right}</div></div><div class="card-content">${body}</div></section>`;
+const readOnlyNote = () => canEdit() || state.tab === 'input' ? '' : '<div class="flex items-center gap-2 rounded-lg border bg-muted/60 px-4 py-2.5 text-sm"><i data-lucide="lock" class="size-4 text-muted-foreground"></i>조회 권한만 있습니다. KPI·목표·데이터 항목은 고객 관리자 이상이 편집합니다.</div>';
+const dis = () => canEdit() ? '' : 'disabled';
+const isLocked = (item, cycle, period) => item.collectionMethod === 'INTERFACE' && item.interfaceFrom && (cycle === 'WEEK' ? isoWeekStart(period) >= isoWeekStart(item.interfaceFrom) : period >= item.interfaceFrom);
+const fmtRaw = (item, v) => v == null ? '' : item.unit === 'AMOUNT' ? Math.round(v).toLocaleString('en-US') : (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+const num = s => { const t = String(s).replace(/,/g, '').trim(); return t === '' ? null : Number(t); };
+const periodShort = (cycle, p) => cycle === 'MONTH' ? `${p.slice(0, 4)}.${p.slice(4)}` : cycle === 'WEEK' ? `${p.slice(2, 4)}-W${p.slice(6)}` : `${p.slice(0, 4)} ${p.slice(4)}`;
+const unitText = item => item.unit === 'AMOUNT' ? H.currency : item.unit;
+
+/* ---------- 상단 ---------- */
+function renderTop() {
+  return `<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2"><div class="overflow-x-auto"><div class="tabs-list" role="tablist">${TABS.map(t => `<button type="button" class="tabs-trigger" role="tab" data-tab="${t.key}" data-state="${t.key === state.tab ? 'active' : 'inactive'}"><i data-lucide="${t.icon}" class="size-4"></i>${t.label}</button>`).join('')}</div></div>
+      <p class="text-sm text-muted-foreground">${TABS.find(t => t.key === state.tab).help}</p></div>
+    <label class="flex items-center gap-2 text-xs text-muted-foreground">시안 역할${tip('시안 전용 — 역할에 따라 버튼이 어떻게 달라지는지 봅니다 (D31).')}<select id="roleSelect" class="select h-8 w-36 text-xs"><option value="CUSTOMER_ADMIN" ${state.role === 'CUSTOMER_ADMIN' ? 'selected' : ''}>고객 관리자</option><option value="CUSTOMER_DEVELOPER" ${state.role === 'CUSTOMER_DEVELOPER' ? 'selected' : ''}>고객 개발자</option></select></label>
+  </div>`;
+}
+
+/* ---------- 데이터 입력 ---------- */
+function inputPeriods() {
+  const c = state.cycle, end = state.end[c], n = c === 'QUARTER' ? 4 : 6;
+  if (c === 'WEEK') { const out = [end]; let s = isoWeekStart(end).getTime(); for (let i = 1; i < n; i++) { s -= 7 * 864e5; out.unshift(isoWeekKey(new Date(s))); } return out; }
+  if (c === 'MONTH') return Array.from({ length: n }, (_, i) => mKey(mIndex(end) - (n - 1 - i)));
+  const [y, q] = [+end.slice(0, 4), +end.slice(5)]; return Array.from({ length: n }, (_, i) => { const t = y * 4 + q - 1 - (n - 1 - i); return `${Math.floor(t / 4)}Q${(t % 4) + 1}`; });
+}
+function shiftEnd(dir) {
+  const c = state.cycle, e = state.end[c], step = c === 'QUARTER' ? 2 : 3;
+  if (c === 'MONTH') state.end.MONTH = mKey(Math.min(mIndex(e) + dir * step, mIndex(LATEST_MONTH) + 1));
+  else if (c === 'WEEK') state.end.WEEK = isoWeekKey(new Date(isoWeekStart(e).getTime() + dir * step * 7 * 864e5));
+  else { const t = +e.slice(0, 4) * 4 + +e.slice(5) - 1 + dir * step; state.end.QUARTER = `${Math.floor(t / 4)}Q${(t % 4) + 1}`; }
+}
+/* 칸 검증 — 형식 오류는 저장을 막고, 변동·분자>분모는 경고만 한다 */
+function checkCell(item, cycle, period, raw, periods) {
+  if (raw == null || String(raw).trim() === '') return {};
+  const v = num(raw);
+  if (!Number.isFinite(v)) return { error: '숫자를 입력하세요.' };
+  if (v < 0 && !item.allowNegative) return { error: '0 이상의 숫자를 입력하세요.' };
+  const idx = periods.indexOf(period);
+  const prevKey = idx > 0 ? periods[idx - 1] : (cycle === 'MONTH' ? mKey(mIndex(period) - 1) : null);
+  const prev = prevKey ? cellValue(item, cycle, prevKey) : null;
+  if (prev && Math.abs(v - prev) / prev > 0.5) return { warn: '직전 기간보다 50% 넘게 바뀌었습니다. 값을 확인해 주세요.' };
+  if (item.denominatorItemKey) { const d = cellValue(itemOf(item.denominatorItemKey), cycle, period); if (d != null && v > d) return { warn: `${item.name}이(가) ${itemOf(item.denominatorItemKey).name}보다 큽니다.` }; }
+  return {};
+}
+function cellValue(item, cycle, period) {
+  const k = valueKey(item.key, cycle, period);
+  if (state.edits[k] !== undefined) return num(state.edits[k]);
+  return P.values[k]?.value ?? null;
+}
+function inputTab() {
+  const used = usedItemKeys(P), cycles = [...new Set(P.items.filter(i => used.has(i.key)).map(i => i.cycle))];
+  if (!cycles.includes(state.cycle)) state.cycle = cycles.includes('MONTH') ? 'MONTH' : cycles[0];
+  const periods = inputPeriods(), miss = missingCells(P), mine = miss.filter(m => m.item.cycle === state.cycle);
+  const diffCount = Object.entries(P.values).filter(([k, v]) => v.interfaceValue != null && v.source !== 'OVERRIDE' && v.interfaceValue !== v.value && k.split('|')[1] === state.cycle).length;
+  const seen = new Set();
+  const groups = P.kpis.filter(k => k.enabled).map(k => {
+    const keys = [...new Set([...kpiItemKeys(k), ...subItemKeys(k)])].filter(x => itemOf(x)?.cycle === state.cycle);
+    const own = keys.filter(x => !seen.has(x)), shared = keys.filter(x => seen.has(x));
+    own.forEach(x => seen.add(x));
+    return { k, own, shared };
+  }).filter(g => g.own.length || g.shared.length);
+  const changed = Object.keys(state.edits), warns = [], errors = [];
+  const cellHtml = (item, p) => {
+    const key = valueKey(item.key, state.cycle, p), v = P.values[key], edit = state.edits[key];
+    const locked = isLocked(item, state.cycle, p), dl = deadlineOf(item, state.cycle, p), left = daysBetween(MOCK_TODAY, dl);
+    const empty = (edit !== undefined ? String(edit).trim() === '' : !v);
+    const overdue = empty && left < 0, soon = empty && left >= 0 && left <= 3;
+    const chk = edit !== undefined ? checkCell(item, state.cycle, p, edit, periods) : {};
+    if (chk.error) errors.push(key); if (chk.warn) warns.push(key);
+    const diff = v?.interfaceValue != null && v.source !== 'OVERRIDE' && v.interfaceValue !== v.value && !locked;
+    const menu = `<button type="button" data-cell="${key}" class="absolute end-0.5 top-0.5 rounded p-0.5 text-muted-foreground opacity-60 hover:bg-accent hover:opacity-100" aria-label="칸 메뉴"><i data-lucide="more-vertical" class="size-3"></i></button>`;
+    const flags = `${v?.status === 'PROVISIONAL' ? '<span class="badge badge-outline px-1 py-0 text-[9px]">잠정</span>' : ''}${diff ? `<span class="size-1.5 rounded-full bg-warning" title="연동 값 ${fmtRaw(item, v.interfaceValue)}이(가) 입력한 값과 다릅니다"></span>` : ''}${v?.source === 'OVERRIDE' ? '<span class="badge badge-warning px-1 py-0 text-[9px]">보정</span>' : ''}`;
+    if (locked) return `<td class="td relative p-1"><div class="flex h-8 items-center justify-end gap-1 rounded-md bg-muted/60 px-2 text-end tabular-nums ${v?.source === 'OVERRIDE' ? 'ring-1 ring-warning' : ''}" title="${v?.source === 'OVERRIDE' ? `보정: ${esc(v.overrideReason)} · 원래 연동 값 ${fmtRaw(item, v.interfaceValue)}` : '병원 시스템에서 연동되는 값이라 여기서 고칠 수 없습니다.'}">${flags}${v ? fmtRaw(item, v.value) : '<span class="text-muted-foreground">대기</span>'}<i data-lucide="plug" class="size-3 text-muted-foreground"></i></div>${menu}</td>`;
+    const ring = chk.error ? 'border-destructive ring-1 ring-destructive' : chk.warn ? 'border-warning ring-1 ring-warning' : edit !== undefined ? 'border-warning bg-warning/10' : overdue ? 'border-destructive' : '';
+    return `<td class="td relative p-1"><div class="flex items-center gap-1">${flags}<input class="input h-8 min-w-24 px-2 text-end text-xs tabular-nums ${ring} ${v?.status === 'PROVISIONAL' ? 'italic' : ''}" data-input="${key}" value="${edit !== undefined ? esc(edit) : fmtRaw(item, v?.value)}" placeholder="${overdue ? '누락' : soon ? '기한 임박' : ''}" title="${esc(chk.error || chk.warn || (overdue ? `입력 기한 ${dl} 지남` : `입력 기한 ${dl}`))}" aria-label="${esc(item.name)} ${p}"/></div>${menu}</td>`;
+  };
+  const head = `<tr class="border-b"><th class="th sticky start-0 z-10 bg-card">데이터 항목</th>${periods.map(p => { const dl = deadlineOf(P.items[0], state.cycle, p); return `<th class="th num"><div>${periodShort(state.cycle, p)}</div><div class="text-[10px] font-normal ${daysBetween(MOCK_TODAY, dl) < 0 ? '' : 'text-warning-foreground'}">기한 ${dl.slice(5).replace('-', '/')}</div></th>`; }).join('')}</tr>`;
+  const rows = groups.map(g => `<tr class="bg-muted/50"><td class="td sticky start-0 z-10 bg-muted text-xs font-semibold" colspan="${periods.length + 1}">${esc(g.k.name)}${g.shared.length ? ` <span class="font-normal text-muted-foreground">· 공통 항목: ${g.shared.map(x => esc(itemOf(x).name)).join(', ')}</span>` : ''}</td></tr>
+    ${g.own.map(x => { const it = itemOf(x); return `<tr class="border-b"><td class="td sticky start-0 z-10 bg-card"><span class="flex items-center gap-1.5"><i data-lucide="${COLLECTION[it.collectionMethod].icon}" class="size-3.5 text-muted-foreground" title="${COLLECTION[it.collectionMethod].label}"></i><span class="max-w-[200px] truncate">${esc(it.name)}</span><span class="text-xs text-muted-foreground">${unitText(it)}</span></span></td>${periods.map(p => cellHtml(it, p)).join('')}</tr>`; }).join('')}`).join('');
+  const toolbar = `<div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="tabs-list" role="tablist">${['WEEK', 'MONTH', 'QUARTER'].map(c => `<button type="button" class="tabs-trigger" role="tab" data-incycle="${c}" data-state="${state.cycle === c ? 'active' : 'inactive'}" ${cycles.includes(c) ? '' : 'disabled style="opacity:.45" title="이 주기로 모으는 데이터 항목이 없습니다"'}>${CYCLE_LABEL[c]}</button>`).join('')}</div>
+      <div class="flex items-center gap-1"><button type="button" class="btn btn-outline btn-icon" data-shift="-1" aria-label="이전 기간"><i data-lucide="chevron-left"></i></button><span class="min-w-36 text-center text-sm tabular-nums">${periodShort(state.cycle, periods[0])} ~ ${periodShort(state.cycle, periods[periods.length - 1])}</span><button type="button" class="btn btn-outline btn-icon" data-shift="1" aria-label="다음 기간"><i data-lucide="chevron-right"></i></button></div>
+      ${mine.filter(m => m.overdue).length ? `<span class="badge badge-destructive">누락 ${mine.filter(m => m.overdue).length}</span>` : ''}${mine.filter(m => !m.overdue).length ? `<span class="badge badge-warning">기한 임박 ${mine.filter(m => !m.overdue).length}</span>` : ''}${diffCount ? `<span class="badge badge-outline"><span class="size-1.5 rounded-full bg-warning"></span>연동 값 차이 ${diffCount}</span>` : ''}
+    </div>
+    <div class="flex items-center gap-2"><button type="button" class="btn btn-outline btn-sm" id="downloadTpl"><i data-lucide="download"></i>양식 내려받기</button><label class="btn btn-outline btn-sm"><i data-lucide="upload"></i>파일 올리기<input type="file" id="uploadFile" accept=".csv,text/csv" class="hidden"/></label></div>
+  </div>`;
+  const legendRow = `<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">${Object.values(COLLECTION).map(c => `<span class="flex items-center gap-1"><i data-lucide="${c.icon}" class="size-3"></i>${c.label}</span>`).join('')}<span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-warning"></span>연동 값 차이${term('연동 값 차이')}</span><span class="flex items-center gap-1"><span class="badge badge-warning px-1 py-0 text-[9px]">보정</span>${term('보정')}</span><span>칸의 ⋮ 메뉴: 값 이력·잠정 표시${canEdit() ? '·연동 값 반영·보정' : ''}</span></div>`;
+  const bar = `<div class="sticky bottom-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/95 px-5 py-3 shadow-sm backdrop-blur">
+    <span class="text-sm text-muted-foreground" id="inputBarText">${barText(changed.length, warns.length, errors.length)}</span>
+    <div class="flex gap-2"><button type="button" class="btn btn-outline" id="inputReset" ${changed.length ? '' : 'disabled'}>취소</button><button type="button" class="btn btn-default" id="inputSave" ${changed.length && !errors.length ? '' : 'disabled'}><i data-lucide="save"></i>저장</button></div></div>`;
+  return card(`데이터 입력 · ${CYCLE_LABEL[state.cycle]} 단위`, `사용 중인 KPI가 쓰는 데이터 항목입니다. 금액은 병원 통화(${H.currency})로 입력합니다. 연동 항목은 잠긴 칸으로 보입니다.`, `<div class="space-y-3">${toolbar}${legendRow}
+    <div class="overflow-x-auto rounded-lg border"><table class="w-full text-sm"><thead>${head}</thead><tbody>${rows || `<tr><td class="td text-muted-foreground" colspan="${periods.length + 1}">이 주기로 모으는 데이터 항목이 없습니다.</td></tr>`}</tbody></table></div>${bar}</div>`);
+}
+const barText = (n, w, er) => n ? `변경 <b class="text-foreground">${n}</b>칸${w ? ` · 경고 ${w}` : ''}${er ? ` · <span class="text-destructive">오류 ${er}</span>` : ''}` : '바꾼 칸이 없습니다. 기한: 주 데이터는 다음 주 수요일, 월 데이터는 다음 달 10일.';
+/* 입력하는 동안에는 표를 다시 그리지 않는다 — 다시 그리면 포커스와 버튼 클릭을 잃는다. 칸 테두리와 저장 막대만 바꾼다 */
+function updateInputStatus() {
+  const periods = inputPeriods();
+  let w = 0, er = 0;
+  document.querySelectorAll('[data-input]').forEach(inp => {
+    const key = inp.dataset.input, [ik, cycle, p] = key.split('|'), edited = state.edits[key] !== undefined;
+    const chk = edited ? checkCell(itemOf(ik), cycle, p, state.edits[key], periods) : {};
+    if (chk.error) er++; if (chk.warn) w++;
+    inp.classList.toggle('border-destructive', !!chk.error); inp.classList.toggle('ring-1', !!(chk.error || chk.warn));
+    inp.classList.toggle('ring-destructive', !!chk.error); inp.classList.toggle('border-warning', !chk.error && (edited || !!chk.warn)); inp.classList.toggle('ring-warning', !!chk.warn);
+    inp.classList.toggle('bg-warning/10', edited && !chk.error && !chk.warn);
+    if (chk.error || chk.warn) inp.title = chk.error || chk.warn;
+  });
+  const n = Object.keys(state.edits).length;
+  document.getElementById('inputBarText').innerHTML = barText(n, w, er);
+  document.getElementById('inputSave').disabled = !n || er > 0;
+  document.getElementById('inputReset').disabled = !n;
+}
+/* 칸 메뉴 — 값 이력, 잠정 표시, 연동 값 반영·보정 (D25) */
+function cellModal(key) {
+  const [ik, cycle, period] = key.split('|'), item = itemOf(ik), v = P.values[key], locked = isLocked(item, cycle, period);
+  const hist = [...(P.history[key] || [])].reverse();
+  const diff = v?.interfaceValue != null && v.source !== 'OVERRIDE' && v.interfaceValue !== v.value && !locked;
+  openModal({
+    title: `${esc(item.name)} · ${periodLabel(cycle, period)}`, size: 'max-w-lg',
+    desc: `${COLLECTION[item.collectionMethod].label}${item.interfaceFrom ? ` (연동 시작 ${item.interfaceFrom})` : ''} · 입력 기한 ${deadlineOf(item, cycle, period)} · 단위 ${unitText(item)}`,
+    body: `<div class="space-y-4 text-sm">
+      <dl class="grid grid-cols-2 gap-3 rounded-lg bg-muted/60 p-3"><div><dt class="text-xs text-muted-foreground">현재 값</dt><dd class="font-semibold tabular-nums">${v ? fmtRaw(item, v.value) : '-'}</dd></div><div><dt class="text-xs text-muted-foreground">출처 · 상태</dt><dd>${v ? `${v.source === 'OVERRIDE' ? '보정' : COLLECTION[v.source]?.label ?? v.source} · ${v.status === 'PROVISIONAL' ? '잠정' : '확정'}` : '-'}</dd></div>
+        ${v?.interfaceValue != null ? `<div><dt class="text-xs text-muted-foreground">연동 값</dt><dd class="tabular-nums">${fmtRaw(item, v.interfaceValue)}</dd></div>` : ''}${v?.overrideReason ? `<div class="col-span-2"><dt class="text-xs text-muted-foreground">보정 사유</dt><dd>${esc(v.overrideReason)}</dd></div>` : ''}
+        ${v ? `<div class="col-span-2 text-xs text-muted-foreground">${v.updatedAt} · ${esc(v.updatedBy)}</div>` : ''}</dl>
+      ${v && !locked ? `<label class="flex items-center gap-2"><input type="checkbox" id="cmProv" class="size-4" ${v.status === 'PROVISIONAL' ? 'checked' : ''}/>잠정·예상 값으로 표시${term('잠정')}</label>` : ''}
+      ${diff && canEdit() ? `<div class="flex items-center justify-between gap-2 rounded-lg border border-warning/60 bg-warning/10 px-3 py-2"><span>연동 값 ${fmtRaw(item, v.interfaceValue)}이(가) 입력한 값 ${fmtRaw(item, v.value)}과 다릅니다.</span><button type="button" class="btn btn-outline btn-sm" id="cmAdopt">연동 값으로 바꾸기</button></div>` : ''}
+      ${locked && canEdit() ? `<fieldset class="space-y-2 rounded-lg border p-3"><legend class="px-1 text-xs font-medium">보정${term('보정')}</legend>
+        <div class="grid gap-2 sm:grid-cols-[8rem_1fr]"><input id="cmOvVal" class="input h-8 text-end tabular-nums" placeholder="보정 값" value="${v?.source === 'OVERRIDE' ? fmtRaw(item, v.value) : ''}"/><input id="cmOvReason" class="input h-8" maxlength="200" placeholder="보정 사유 (필수)" value="${esc(v?.overrideReason ?? '')}"/></div>
+        <div class="flex justify-end gap-2">${v?.source === 'OVERRIDE' ? '<button type="button" class="btn btn-ghost btn-sm" id="cmOvRelease">보정 풀기</button>' : ''}<button type="button" class="btn btn-outline btn-sm" id="cmOvSave">보정 저장</button></div></fieldset>` : ''}
+      <div><div class="mb-1 text-xs font-medium text-muted-foreground">값 이력</div>${hist.length ? `<ul class="divide-y rounded-lg border">${hist.map(h => `<li class="flex justify-between gap-3 px-3 py-1.5 text-xs"><span class="tabular-nums">${h.value == null ? '(빈 값)' : fmtRaw(item, h.value)}</span><span class="text-muted-foreground">${COLLECTION[h.source]?.label ?? h.source} · ${h.updatedAt} · ${esc(h.updatedBy)}</span></li>`).join('')}</ul>` : '<p class="text-xs text-muted-foreground">이력이 없습니다.</p>'}</div>
+    </div>`,
+    footer: `<button type="button" class="btn btn-outline" data-close>닫기</button>`,
+    onMount: (el, close) => {
+      const pushHist = () => { (P.history[key] ||= []).push({ value: v.value, status: v.status, source: v.source, updatedAt: v.updatedAt, updatedBy: v.updatedBy }); };
+      el.querySelector('#cmProv')?.addEventListener('change', e => { pushHist(); Object.assign(v, { status: e.target.checked ? 'PROVISIONAL' : 'FINAL', updatedAt: stampNow(), updatedBy: '홍길동' }); persist(); close(); render(); toast('저장했습니다. 병원정보 화면에 반영됩니다.'); });
+      el.querySelector('#cmAdopt')?.addEventListener('click', () => confirmModal('이 기간을 연동 값으로 바꿉니다. 기준값이 바뀌면 진척률과 EBITDA 효과도 달라집니다. 계속할까요?', () => {
+        pushHist(); Object.assign(v, { value: v.interfaceValue, interfaceValue: null, source: 'INTERFACE', updatedAt: stampNow(), updatedBy: '홍길동' }); persist(); close(); render(); toast('연동 값으로 바꿨습니다.');
+      }));
+      el.querySelector('#cmOvSave')?.addEventListener('click', () => {
+        const val = num(el.querySelector('#cmOvVal').value), reason = el.querySelector('#cmOvReason').value.trim();
+        if (!Number.isFinite(val)) { toast('숫자를 입력하세요.'); return; }
+        if (!reason) { toast('보정 사유를 입력하세요.'); return; }
+        if (v) pushHist();
+        const base = v || { status: 'FINAL' };
+        P.values[key] = { ...base, interfaceValue: base.source === 'OVERRIDE' ? base.interfaceValue : (base.value ?? null), value: val, source: 'OVERRIDE', overrideReason: reason, updatedAt: stampNow(), updatedBy: '홍길동' };
+        persist(); close(); render(); toast('보정 값을 저장했습니다.');
+      });
+      el.querySelector('#cmOvRelease')?.addEventListener('click', () => { pushHist(); Object.assign(v, { value: v.interfaceValue, interfaceValue: null, source: 'INTERFACE', overrideReason: null, updatedAt: stampNow(), updatedBy: '홍길동' }); persist(); close(); render(); toast('보정을 풀고 연동 값으로 돌렸습니다.'); });
+    },
+  });
+}
+function saveInputs() {
+  Object.entries(state.edits).forEach(([key, raw]) => {
+    const v = P.values[key], val = num(raw), [ik] = key.split('|'), item = itemOf(ik);
+    if (v) (P.history[key] ||= []).push({ value: v.value, status: v.status, source: v.source, updatedAt: v.updatedAt, updatedBy: v.updatedBy });
+    if (val == null) delete P.values[key];
+    else P.values[key] = { ...(v || {}), value: val, status: v?.status ?? 'FINAL', source: item.collectionMethod === 'UPLOAD' ? 'UPLOAD' : 'MANUAL', updatedAt: stampNow(), updatedBy: '홍길동' };
+  });
+  const n = Object.keys(state.edits).length;
+  state.edits = {}; persist(); render(); toast(`${n}칸을 저장했습니다. 병원정보 화면에 반영됩니다.`);
+}
+function downloadTemplate() {
+  const periods = inputPeriods(), used = usedItemKeys(P);
+  const rows = [['itemKey', 'name', 'cycle', 'period', 'value']];
+  P.items.filter(i => used.has(i.key) && i.cycle === state.cycle).forEach(i => periods.forEach(p => { if (!isLocked(i, state.cycle, p)) rows.push([i.key, i.name, state.cycle, p, P.values[valueKey(i.key, state.cycle, p)]?.value ?? '']); }));
+  const blob = new Blob(['﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${H.code}_${state.cycle}_${periods[0]}_${periods[periods.length - 1]}.csv`; a.click();
+}
+function uploadFile(file) {
+  file.text().then(text => {
+    const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(Boolean), rejected = [];
+    let filled = 0;
+    lines.slice(1).forEach((line, i) => {
+      const [itemKey, , cycle, period, value] = line.split(',').map(c => c.replace(/^"|"$/g, '').replace(/""/g, '"'));
+      const item = itemOf(itemKey);
+      if (!item) return rejected.push(`${i + 2}행: 모르는 항목 ${itemKey}`);
+      if (item.cycle !== cycle) return rejected.push(`${i + 2}행: 주기 불일치`);
+      if (isLocked(item, cycle, period)) return rejected.push(`${i + 2}행: 연동 항목`);
+      if (value === '') return;
+      if (!Number.isFinite(num(value))) return rejected.push(`${i + 2}행: 숫자 아님`);
+      state.edits[valueKey(itemKey, cycle, period)] = value; filled++;
+    });
+    render();
+    toast(`파일 값 ${filled}칸을 채웠습니다. 저장해야 반영됩니다.${rejected.length ? ` 읽지 못한 행 ${rejected.length}개` : ''}`);
+  });
+}
+
+/* ---------- KPI 항목 ---------- */
+function kpiTab() {
+  const list = P.kpis;
+  const rows = list.map((k, i) => `<tr class="border-b last:border-0 ${k.enabled ? '' : 'text-muted-foreground'}">
+    <td class="td tabular-nums text-muted-foreground">${i + 1}</td>
+    <td class="td font-medium">${esc(k.name)}${k.seed ? (k.seedModified ? ' <span class="badge badge-outline ms-1">시드 수정</span>' : '') : ' <span class="badge badge-warning ms-1">추가</span>'}</td>
+    <td class="td"><span class="badge badge-outline">${KPI_CATEGORY[k.category]}</span></td>
+    <td class="td">${k.unit === 'AMOUNT' ? `금액 (${CUR.code})` : KPI_UNIT[k.unit]?.label ?? k.unitLabel}</td>
+    <td class="td">${k.direction === 'UP' ? '높을수록 ↑' : '낮을수록 ↓'}</td>
+    <td class="td">${CYCLE_LABEL[k.cycle]}${k.lag ? ` · 지연 ${k.lag}` : ''}</td>
+    <td class="td text-xs">${EBITDA_METHOD[k.ebitda.method]}</td>
+    <td class="td">${P.targets[k.key] ? '<span class="badge badge-secondary">있음</span>' : '<span class="text-xs text-muted-foreground">없음</span>'}</td>
+    <td class="td">${switchHtml(k.enabled, `data-kpi-toggle="${k.key}" ${dis()} aria-label="${esc(k.name)} 사용"`)}</td>
+    <td class="td text-end"><div class="inline-flex gap-1">
+      ${canEdit() ? `<button type="button" class="btn btn-ghost btn-icon" data-kpi-move="${i}:-1" ${i === 0 ? 'disabled' : ''} aria-label="위로"><i data-lucide="arrow-up"></i></button><button type="button" class="btn btn-ghost btn-icon" data-kpi-move="${i}:1" ${i === list.length - 1 ? 'disabled' : ''} aria-label="아래로"><i data-lucide="arrow-down"></i></button>` : ''}
+      <button type="button" class="btn btn-ghost btn-icon" data-kpi-edit="${k.key}" aria-label="${canEdit() ? '편집' : '보기'}"><i data-lucide="${canEdit() ? 'pencil' : 'eye'}"></i></button>
+      ${!k.seed && canEdit() ? `<button type="button" class="btn btn-ghost btn-icon text-destructive" data-kpi-delete="${k.key}" aria-label="삭제"><i data-lucide="trash-2"></i></button>` : ''}
+    </div></td></tr>`).join('');
+  return readOnlyNote() + card('KPI 항목', `${list.filter(k => k.enabled).length}개 사용 중 · 순서는 병원정보 화면의 순서입니다. 사용을 끄면 화면과 합계에서 빠지고 데이터는 남습니다.`, `
+    <div class="overflow-x-auto"><table class="w-full min-w-[960px] text-sm"><thead><tr class="border-b"><th class="th w-10">순서</th><th class="th">KPI</th><th class="th">분류</th><th class="th">단위</th><th class="th">좋은 방향</th><th class="th">주기·지연</th><th class="th">EBITDA 환산</th><th class="th">목표</th><th class="th">사용</th><th class="th text-end">관리</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+    canEdit() ? '<button type="button" class="btn btn-default btn-sm" id="addKpi"><i data-lucide="plus"></i>KPI 추가</button>' : '');
+}
+function addKpiModal() {
+  const avail = KPI_TEMPLATES.filter(t => t.key === 'REVENUE_ITEM' || !kpiOf(t.key));
+  openModal({
+    title: 'KPI 추가', size: 'max-w-xl', desc: '템플릿에서 고르면 계산식과 필요한 데이터 항목이 함께 만들어집니다.',
+    body: `<div class="space-y-2">${avail.map(t => `<button type="button" data-tpl="${t.key}" class="flex w-full items-start gap-3 rounded-lg border p-3 text-start hover:bg-accent/40"><i data-lucide="layout-template" class="mt-0.5 size-4 shrink-0 text-primary"></i><span class="space-y-0.5"><span class="block text-sm font-medium">${esc(t.name)} <span class="badge badge-outline ms-1">${KPI_CATEGORY[t.category]}</span></span><span class="block text-xs text-muted-foreground">${esc(t.templateNote)}</span></span></button>`).join('')}
+      <button type="button" data-tpl="" class="flex w-full items-start gap-3 rounded-lg border border-dashed p-3 text-start hover:bg-accent/40"><i data-lucide="square-pen" class="mt-0.5 size-4 shrink-0 text-muted-foreground"></i><span><span class="block text-sm font-medium">직접 만들기</span><span class="block text-xs text-muted-foreground">이미 있는 데이터 항목으로 계산식을 씁니다.</span></span></button></div>`,
+    footer: '<button type="button" class="btn btn-outline" data-close>취소</button>',
+    onMount: (el, close) => el.addEventListener('click', e => {
+      const b = e.target.closest('[data-tpl]'); if (!b) return;
+      close();
+      const t = KPI_TEMPLATES.find(x => x.key === b.dataset.tpl);
+      if (!t) return kpiModal(null);
+      if (t.key === 'REVENUE_ITEM') return revenueItemKpiModal(t);
+      (TEMPLATE_ITEMS[t.key] || []).forEach(([key, name, unit, aggregation]) => { if (!itemOf(key)) P.items.push({ key, name, unit, aggregation, cycle: 'QUARTER', collectionMethod: 'MANUAL', sourceSystem: 'CMS 보고서 / 수기', referenceDateNote: '분기', denominatorItemKey: null, interfaceFrom: null, deadline: { dayOfMonth: 10 }, allowNegative: unit === 'AMOUNT' && key.startsWith('CMS_ADJ'), seed: false }); });
+      P.kpis.push({ ...structuredClone(t), seed: false, enabled: true });
+      persist(); render(); toast(`${t.name} KPI를 추가했습니다. 데이터 항목 ${TEMPLATE_ITEMS[t.key]?.length ?? 0}개가 함께 생겼습니다.`);
+    }),
+  });
+}
+function revenueItemKpiModal(t) {
+  openModal({
+    title: '추가 수익 항목 KPI', size: 'max-w-md', desc: '매출·직접비 데이터 항목 한 쌍과 순수익 KPI를 만듭니다.',
+    body: `<label class="block space-y-1.5"><span class="label">수익 항목 이름 <span class="text-destructive">*</span></span><input id="riName" class="input" maxlength="20" placeholder="예: 건강검진 패키지"/></label>`,
+    footer: '<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="riSave">만들기</button>',
+    onMount: (el, close) => el.querySelector('#riSave').addEventListener('click', () => {
+      const name = el.querySelector('#riName').value.trim(); if (!name) return;
+      const K = 'REV' + (P.kpis.filter(k => k.key.startsWith('REV')).length + 1);
+      P.items.push(...[['_REVENUE', `${name} 매출`], ['_DIRECT_COST', `${name} 직접비`]].map(([s, n]) => ({ key: K + s, name: n, unit: 'AMOUNT', aggregation: 'SUM', cycle: 'MONTH', collectionMethod: 'MANUAL', sourceSystem: '원무·회계', referenceDateNote: '진료일', denominatorItemKey: null, interfaceFrom: null, deadline: { dayOfMonth: 10 }, allowNegative: false, seed: false })));
+      P.kpis.push({ ...structuredClone(t), key: K, name: `${name} 순수익`, seed: false, formula: { kind: 'EXPRESSION', expression: `(${K}_REVENUE - ${K}_DIRECT_COST) / months` } });
+      persist(); close(); render(); toast(`${name} 순수익 KPI와 데이터 항목 2개를 만들었습니다. 데이터 입력 탭에서 값을 넣으세요.`);
+    }),
+  });
+}
+/* KPI 편집 — 계산식·환산을 바꾸면 전 기간을 다시 계산한다 (D29) */
+function kpiModal(key) {
+  const orig = key ? kpiOf(key) : null, k = orig ? structuredClone(orig) : { key: 'KPI' + Date.now().toString(36).toUpperCase(), name: '', category: 'REVENUE', unit: 'COUNT', unitLabel: null, decimals: 0, direction: 'UP', formula: { kind: 'EXPRESSION', expression: '' }, cycle: 'MONTH', lag: 0, ebitda: { method: 'NONE' }, subMetrics: [], enabled: true, seed: false };
+  const ro = !canEdit();
+  const itemChips = P.items.map(i => `<button type="button" data-chip="${i.key}" class="badge badge-outline cursor-pointer hover:bg-accent" title="${esc(i.name)} · ${CYCLE_LABEL[i.cycle]} · ${AGGREGATION[i.aggregation]}">${esc(i.name)}</button>`).join('');
+  const field = (label, html, help = '') => `<label class="block space-y-1.5"><span class="label flex items-center gap-1.5">${label}${tip(help)}</span>${html}</label>`;
+  const sel = (id, opts, v) => `<select id="${id}" class="select" ${ro ? 'disabled' : ''}>${Object.entries(opts).map(([a, b]) => `<option value="${a}" ${a === v ? 'selected' : ''}>${b}</option>`).join('')}</select>`;
+  const inp = (id, v, ph = '', cls = '') => `<input id="${id}" class="input ${cls}" value="${esc(v ?? '')}" placeholder="${ph}" ${ro ? 'disabled' : ''}/>`;
+  const seedDef = k.seed ? KPI_SEED.find(s => s.key === k.key) : null;
+  openModal({
+    title: orig ? (ro ? 'KPI 보기' : 'KPI 편집') : 'KPI 직접 만들기', size: 'max-w-3xl',
+    desc: k.seed ? '기본 제공 KPI입니다. 고쳐도 시드 값으로 되돌릴 수 있습니다.' : '',
+    body: `<form class="space-y-5" onsubmit="return false">
+      <div class="grid gap-4 sm:grid-cols-3">${field('이름 <span class="text-destructive">*</span>', inp('kmName', k.name, '예: 수술실 가동률'))}${field('분류', sel('kmCat', KPI_CATEGORY, k.category))}${field('좋은 방향', sel('kmDir', { UP: '높을수록 좋음', DOWN: '낮을수록 좋음' }, k.direction))}</div>
+      <div class="grid gap-4 sm:grid-cols-4">${field('단위', sel('kmUnit', Object.fromEntries(Object.entries(KPI_UNIT).map(([a, b]) => [a, b.label])), k.unit))}${field('소수 자릿수', inp('kmDec', k.decimals, '', 'text-end'))}${field('측정 주기', sel('kmCycle', { MONTH: '월', QUARTER: '분기', WEEK: '주' }, k.cycle), '계산식이 쓰는 데이터 항목의 수집 주기보다 짧을 수 없습니다.')}${field(`측정 지연 (기간 수)${term('측정 지연')}`, inp('kmLag', k.lag, '', 'text-end'))}</div>
+      <fieldset class="space-y-2 rounded-lg border p-4"><legend class="px-1 text-sm font-medium">계산식</legend>
+        <div class="flex gap-4 text-sm">${[['EXPRESSION', '계산식'], ['RATIO', '비율 (분자 ÷ 분모 × 100)']].map(([v, l]) => `<label class="flex items-center gap-2"><input type="radio" name="kmKind" value="${v}" class="size-4" ${k.formula.kind === v ? 'checked' : ''} ${ro ? 'disabled' : ''}/>${l}</label>`).join('')}</div>
+        <div id="kmExprWrap" class="${k.formula.kind === 'EXPRESSION' ? '' : 'hidden'}">${inp('kmExpr', k.formula.expression, '예: DISCHARGES / STAFFED_BEDS / months', 'font-mono text-xs')}</div>
+        <div id="kmRatioWrap" class="grid gap-2 sm:grid-cols-2 ${k.formula.kind === 'RATIO' ? '' : 'hidden'}">${inp('kmNum', k.formula.numerator, '분자 (예: READMIT_30D)', 'font-mono text-xs')}${inp('kmDen', k.formula.denominator, '분모 (예: DISCHARGES)', 'font-mono text-xs')}</div>
+        ${ro ? '' : `<div class="flex flex-wrap gap-1">${itemChips}<span class="badge badge-outline cursor-pointer" data-chip="months">개월 수 months</span><span class="badge badge-outline cursor-pointer" data-chip="days">일수 days</span></div>`}
+        <p class="text-xs text-muted-foreground">데이터 항목을 누르면 커서 자리에 들어갑니다. 비율 KPI는 기간을 합칠 때 분자·분모를 각각 합한 뒤 나눕니다. 횟수·금액 KPI는 <code>months</code>로 나눠 월 기준으로 둡니다.</p>
+        <div id="kmPreview" class="rounded-md bg-muted/60 px-3 py-2 text-xs"></div>
+      </fieldset>
+      <fieldset class="space-y-3 rounded-lg border p-4"><legend class="px-1 text-sm font-medium">EBITDA 환산</legend>
+        <div class="grid gap-2 sm:grid-cols-2">${Object.entries(EBITDA_METHOD).map(([v, l]) => `<label class="flex items-center gap-2 text-sm"><input type="radio" name="kmMethod" value="${v}" class="size-4" ${k.ebitda.method === v ? 'checked' : ''} ${ro ? 'disabled' : ''}/>${l}</label>`).join('')}</div>
+        <div id="kmM_DELTA_X_BASE" class="grid gap-3 sm:grid-cols-2">${field('규모 (데이터 항목 식)', inp('kmScale', k.ebitda.scale, 'STAFFED_BEDS * months', 'font-mono text-xs'))}${field('단가 (식 또는 1)', inp('kmUnitV', k.ebitda.unitValue, 'INPATIENT_REVENUE / DISCHARGES', 'font-mono text-xs'))}${field(`계수 (%)${term('공헌이익률')}`, inp('kmFactor', k.ebitda.factor, '35', 'text-end'))}${field('계수 근거', inp('kmBasis', k.ebitda.factorBasis, '예: 입원 공헌이익률 — 재무팀 2026 확인'))}</div>
+        <div id="kmM_CUSTOM" class="space-y-3">${field('직접 계산식 (변수: current, base, factor, 데이터 항목, base_항목)', inp('kmCustom', k.ebitda.expression, '(base - current) * CLAIM_AMOUNT / 100', 'font-mono text-xs'))}${field('계수 근거', inp('kmBasis2', k.ebitda.factorBasis))}</div>
+        ${k.category === 'CASH' || k.ebitda.cashExpression ? field(`현금흐름 효과식${term('현금흐름 효과')}`, inp('kmCash', k.ebitda.cashExpression, '(base - current) * PATIENT_REVENUE / days', 'font-mono text-xs')) : ''}
+        <p id="kmMethodNote" class="text-xs text-muted-foreground"></p>
+      </fieldset>
+      ${orig && (P.kpiHistory[k.key] || []).length ? `<details class="text-sm"><summary class="cursor-pointer text-muted-foreground">변경 이력 ${(P.kpiHistory[k.key]).length}건</summary><ul class="mt-2 divide-y rounded-lg border">${[...P.kpiHistory[k.key]].reverse().map(h => `<li class="px-3 py-1.5 text-xs">${h.changedAt} · ${esc(h.changedBy)} — ${h.changes.map(c => `${esc(c.field)}: ${esc(String(c.before))} → ${esc(String(c.after))}`).join(', ')}</li>`).join('')}</ul></details>` : ''}
+    </form>`,
+    footer: ro ? '<button type="button" class="btn btn-outline" data-close>닫기</button>' : `${seedDef && k.seedModified ? '<button type="button" class="btn btn-ghost me-auto" id="kmReset"><i data-lucide="rotate-ccw"></i>시드 값으로 되돌리기</button>' : ''}<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="kmSave">저장</button>`,
+    onMount: (el, close) => {
+      let focus = el.querySelector('#kmExpr');
+      el.querySelectorAll('input.font-mono').forEach(i => i.addEventListener('focus', () => { focus = i; }));
+      const q = s => el.querySelector(s);
+      const read = () => {
+        const kind = q('input[name="kmKind"]:checked').value, method = q('input[name="kmMethod"]:checked').value;
+        return { ...k, name: q('#kmName').value.trim(), category: q('#kmCat').value, direction: q('#kmDir').value, unit: q('#kmUnit').value, decimals: +q('#kmDec').value || 0, cycle: q('#kmCycle').value, lag: +q('#kmLag').value || 0,
+          formula: kind === 'RATIO' ? { kind, numerator: q('#kmNum').value.trim(), denominator: q('#kmDen').value.trim(), multiplier: 100 } : { kind, expression: q('#kmExpr').value.trim() },
+          ebitda: { method, ...(method === 'DELTA_X_BASE' ? { scale: q('#kmScale').value.trim(), unitValue: q('#kmUnitV').value.trim() || '1', factor: +q('#kmFactor').value || 0, factorBasis: q('#kmBasis').value.trim() } : {}),
+            ...(method === 'CUSTOM' ? { expression: q('#kmCustom').value.trim(), factor: k.ebitda.factor ?? 100, factorBasis: q('#kmBasis2').value.trim() } : {}), ...(q('#kmCash')?.value.trim() ? { cashExpression: q('#kmCash').value.trim() } : {}) } };
+      };
+      /* 검증 — 문법, 모르는 데이터 항목, 측정 주기 */
+      const validate = d => {
+        const allowed = new Set([...P.items.map(i => i.key), ...P.items.map(i => 'base_' + i.key), 'months', 'days', 'current', 'base', 'factor']);
+        const exprs = d.formula.kind === 'RATIO' ? [d.formula.numerator, d.formula.denominator] : [d.formula.expression];
+        if (d.ebitda.method === 'DELTA_X_BASE') exprs.push(d.ebitda.scale, d.ebitda.unitValue); if (d.ebitda.method === 'CUSTOM') exprs.push(d.ebitda.expression); if (d.ebitda.cashExpression) exprs.push(d.ebitda.cashExpression);
+        for (const e of exprs) { try { parseFormula(e, allowed); } catch (err) { return `계산식을 확인하세요: ${err.message}${e ? ` (${e})` : ''}`; } }
+        const longest = formulaItemKeys(d).map(x => itemOf(x)?.cycle).reduce((a, c) => CYCLE_ORDER[c] > CYCLE_ORDER[a] ? c : a, 'WEEK');
+        if (CYCLE_ORDER[d.cycle] < CYCLE_ORDER[longest]) return `측정 주기는 계산식이 쓰는 데이터 항목의 주기(${CYCLE_LABEL[longest]})보다 짧을 수 없습니다.`;
+        return '';
+      };
+      const preview = () => {
+        const d = read(), err = validate(d);
+        ['DELTA_X_BASE', 'CUSTOM'].forEach(m => q('#kmM_' + m).classList.toggle('hidden', d.ebitda.method !== m));
+        q('#kmMethodNote').textContent = d.ebitda.method === 'AMOUNT_DELTA' ? '금액 KPI의 기준 대비 변화(월 기준 × 개월 수)가 곧 EBITDA 효과입니다.' : d.ebitda.method === 'NONE' ? '병원정보에 "모니터링"으로 보이고 EBITDA 합계에 들어가지 않습니다.' : '';
+        q('#kmExprWrap').classList.toggle('hidden', d.formula.kind !== 'EXPRESSION'); q('#kmRatioWrap').classList.toggle('hidden', d.formula.kind !== 'RATIO');
+        if (err) { q('#kmPreview').innerHTML = `<span class="text-destructive">${esc(err)}</span>`; return err; }
+        const r = computeKpis({ kpis: [{ ...d, enabled: true }], targets: {}, items: P.items, values: P.values, cycle: d.cycle === 'QUARTER' ? 'QUARTER' : 'MONTH', from: d.cycle === 'QUARTER' ? '2026Q1' : mKey(mIndex(LATEST_MONTH) - 2), to: d.cycle === 'QUARTER' ? '2026Q3' : LATEST_MONTH, latestMonth: LATEST_MONTH, fx }).results[0];
+        q('#kmPreview').innerHTML = `<b>${esc(describeFormula(d, P.items))}</b><div class="mt-1 text-muted-foreground">최근 값: ${r.periods.map(p => `${periodShort(d.cycle === 'QUARTER' ? 'QUARTER' : 'MONTH', p.period)} ${p.value == null ? '-' : fmtKpi(d, p.value, fx(2026))}`).join(' · ')}</div>`;
+        return '';
+      };
+      el.addEventListener('input', preview); el.addEventListener('change', preview); preview();
+      el.addEventListener('click', e => { const c = e.target.closest('[data-chip]'); if (!c || !focus) return; const pos = focus.selectionStart ?? focus.value.length; focus.value = focus.value.slice(0, pos) + c.dataset.chip + focus.value.slice(focus.selectionEnd ?? pos); focus.focus(); preview(); });
+      q('#kmReset')?.addEventListener('click', () => confirmModal('시드 값으로 되돌립니다. 기준값과 과거 기간도 시드 정의로 다시 계산됩니다.', () => {
+        Object.assign(orig, structuredClone(seedDef), { enabled: orig.enabled, seedModified: false });
+        (P.kpiHistory[k.key] ||= []).push({ changedAt: stampNow(), changedBy: '홍길동', changes: [{ field: '정의', before: '수정본', after: '시드 값' }] });
+        persist(); close(); render(); toast('시드 값으로 되돌렸습니다.');
+      }));
+      q('#kmSave')?.addEventListener('click', () => {
+        const d = read();
+        if (!d.name) { toast('이름을 입력하세요.'); return; }
+        if (P.kpis.some(x => x.name === d.name && x.key !== d.key)) { toast('같은 이름의 KPI가 있습니다.'); return; }
+        if (preview()) return;
+        const commit = changes => {
+          if (orig) Object.assign(orig, d, { seedModified: orig.seed ? true : false }); else P.kpis.push(d);
+          if (changes?.length) (P.kpiHistory[d.key] ||= []).push({ changedAt: stampNow(), changedBy: '홍길동', changes });
+          persist(); close(); render(); toast('저장했습니다. 병원정보 화면에 반영됩니다.');
+        };
+        if (!orig) return commit();
+        const changes = [];
+        const fText = x => x.formula.kind === 'RATIO' ? `${x.formula.numerator} ÷ ${x.formula.denominator}` : x.formula.expression;
+        if (fText(orig) !== fText(d)) changes.push({ field: '계산식', before: fText(orig), after: fText(d) });
+        if (JSON.stringify(orig.ebitda) !== JSON.stringify(d.ebitda)) changes.push({ field: 'EBITDA 환산', before: `${EBITDA_METHOD[orig.ebitda.method]}${orig.ebitda.factor != null ? ' ' + orig.ebitda.factor + '%' : ''}`, after: `${EBITDA_METHOD[d.ebitda.method]}${d.ebitda.factor != null ? ' ' + d.ebitda.factor + '%' : ''}` });
+        if (!changes.length) return commit();
+        // 다시 계산되는 값을 미리 보여 준다
+        const calc = def => computeKpis({ kpis: [{ ...def, enabled: true }], targets: P.targets, items: P.items, values: P.values, cycle: 'MONTH', from: '202501', to: LATEST_MONTH, latestMonth: LATEST_MONTH, fx }).results[0];
+        const a = calc(orig), b = calc(d);
+        const row = (l, x, y) => `<tr class="border-b"><td class="td">${l}</td><td class="td num">${x}</td><td class="td num font-semibold">${y}</td></tr>`;
+        confirmModal(`<span class="block">저장하면 기준값과 과거 기간까지 모두 새 정의로 다시 계산됩니다. 지난 보고 숫자와 달라질 수 있습니다.</span>
+          <table class="mt-3 w-full text-sm"><thead><tr class="border-b"><th class="th"></th><th class="th num">지금</th><th class="th num">저장 후</th></tr></thead><tbody>
+          ${row('기준값', fmtKpi(orig, a.base, fx(2025)), fmtKpi(d, b.base, fx(2025)))}${row('현재값', fmtKpi(orig, a.current?.value, fx(2026)), fmtKpi(d, b.current?.value, fx(2026)))}${row('누적 EBITDA 효과', F.short(a.cumulative), F.short(b.cumulative))}</tbody></table>
+          ${P.targets[d.key]?.baselineValue != null ? '<span class="mt-2 block text-xs text-warning-foreground">기준값을 직접 입력한 KPI입니다. 새 정의에 맞는 기준값인지 확인해 주세요.</span>' : ''}`,
+          () => commit(changes), { okLabel: '저장', title: '다시 계산 확인' });
+      });
+    },
+  });
+}
+
+/* ---------- 기준·목표 ---------- */
+function targetTab() {
+  const r = computeKpis({ kpis: P.kpis, targets: P.targets, items: P.items, values: P.values, cycle: 'MONTH', from: '202501', to: LATEST_MONTH, latestMonth: LATEST_MONTH, fx });
+  const rows = P.kpis.filter(k => k.enabled).map(k => {
+    const t = P.targets[k.key], res = r.results.find(x => x.kpiKey === k.key), f25 = fx(2025);
+    const months = t ? periodsBetween('MONTH', t.baselineFrom, t.baselineTo).length : 0;
+    return `<tr class="border-b last:border-0">
+      <td class="td font-medium">${esc(k.name)}</td>
+      <td class="td tabular-nums">${t ? `${t.baselineFrom.slice(0, 4)}.${t.baselineFrom.slice(4)} ~ ${t.baselineTo.slice(0, 4)}.${t.baselineTo.slice(4)} <span class="text-xs text-muted-foreground">(${months}개월)</span>` : '-'}</td>
+      <td class="td num">${t ? fmtKpi(k, res.base, f25) + (t.baselineValue != null ? ' <span class="badge badge-warning ms-1">수기 기준</span>' : '') : '-'}</td>
+      <td class="td num font-semibold">${t ? fmtKpi(k, t.targetValue, fx(2026)) : '-'}</td>
+      <td class="td tabular-nums">${t ? `${t.targetPeriod.slice(0, 4)}.${t.targetPeriod.slice(4)}` : '-'}</td>
+      <td class="td num">${t?.milestones.length || '-'}</td>
+      <td class="td num">${t ? F.pct(t.toleranceRatio, 0) : '-'}</td>
+      <td class="td num">${res.targetAnnualized != null ? F.short(res.targetAnnualized) : k.ebitda.method === 'NONE' ? '<span class="text-xs text-muted-foreground">모니터링</span>' : '-'}</td>
+      <td class="td"><span class="badge ${KPI_STATUS[res.status].cls}">${KPI_STATUS[res.status].label}</span></td>
+      <td class="td text-end"><div class="inline-flex gap-1"><button type="button" class="btn btn-ghost btn-sm" data-target-edit="${k.key}"><i data-lucide="${canEdit() ? 'pencil' : 'eye'}"></i>${t ? (canEdit() ? '편집' : '보기') : '목표 정하기'}</button>${(P.targetHistory[k.key] || []).length ? `<button type="button" class="btn btn-ghost btn-icon" data-target-history="${k.key}" aria-label="목표 이력"><i data-lucide="history"></i></button>` : ''}</div></td></tr>`;
+  }).join('');
+  return readOnlyNote() + card(`기준·목표${term('기준 기간')}`, '기준값은 기준 기간의 KPI 값 하나입니다(분자·분모를 기간 전체로 합산, D28). 목표 시 연환산 효과는 최근 기간 규모로 계산합니다.', `
+    <div class="overflow-x-auto"><table class="w-full min-w-[980px] text-sm"><thead><tr class="border-b"><th class="th">KPI</th><th class="th">기준 기간</th><th class="th num">기준값</th><th class="th num">목표값</th><th class="th">목표 시점</th><th class="th num">중간 목표</th><th class="th num"><span class="inline-flex items-center gap-1">허용 오차${term('허용 오차')}</span></th><th class="th num">목표 시 연환산 효과</th><th class="th">상태</th><th class="th text-end">관리</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+}
+const toMonthInput = m => m ? `${m.slice(0, 4)}-${m.slice(4)}` : '';
+const fromMonthInput = v => v ? v.replace('-', '') : '';
+function targetModal(key) {
+  const k = kpiOf(key), orig = P.targets[key], ro = !canEdit();
+  const t = orig ? structuredClone(orig) : { baselineFrom: mKey(mIndex(LATEST_MONTH) - 2), baselineTo: LATEST_MONTH, baselineValue: null, targetValue: null, targetPeriod: '202712', milestones: [], toleranceRatio: 0.1 };
+  const seasonal = k.key === 'OUTPATIENT_VISITS';
+  const dsb = ro ? 'disabled' : '';
+  openModal({
+    title: `기준·목표 — ${esc(k.name)}`, size: 'max-w-3xl', desc: `${esc(describeFormula(k, P.items))} · ${k.direction === 'UP' ? '높을수록 좋음' : '낮을수록 좋음'}${k.unit === 'AMOUNT' ? ` · 금액은 병원 통화(${H.currency})로 입력` : ''}`,
+    body: `<form class="space-y-5" onsubmit="return false">
+      <fieldset class="grid gap-4 sm:grid-cols-3"><legend class="label mb-2 flex items-center gap-1.5">기준 기간${term('기준 기간')}</legend>
+        <label class="block space-y-1.5"><span class="text-xs text-muted-foreground">시작</span><input type="month" id="tmFrom" class="input" value="${toMonthInput(t.baselineFrom)}" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="text-xs text-muted-foreground">끝</span><input type="month" id="tmTo" class="input" value="${toMonthInput(t.baselineTo)}" ${dsb}/></label>
+        <div class="space-y-1.5"><span class="text-xs text-muted-foreground">기준값</span><div class="flex items-center gap-2"><input id="tmBase" class="input text-end tabular-nums" value="${t.baselineValue ?? ''}" placeholder="데이터로 계산" ${dsb}/></div><span id="tmBaseNote" class="block text-xs text-muted-foreground"></span></div>
+      </fieldset>
+      <p id="tmSeasonal" class="hidden rounded-md border border-warning/60 bg-warning/10 px-3 py-2 text-xs">계절 변동이 큰 KPI입니다. 기준 기간을 12개월로 잡으면 달마다 상태가 덜 흔들립니다.</p>
+      <div class="grid gap-4 sm:grid-cols-3">
+        <label class="block space-y-1.5"><span class="label">목표값 <span class="text-destructive">*</span></span><input id="tmTarget" class="input text-end tabular-nums" value="${t.targetValue ?? ''}" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="label">목표 시점 <span class="text-destructive">*</span></span><input type="month" id="tmPeriod" class="input" value="${toMonthInput(t.targetPeriod)}" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="label flex items-center gap-1.5">허용 오차 (%)${term('허용 오차')}</span><input id="tmTol" class="input text-end" value="${Math.round(t.toleranceRatio * 100)}" ${dsb}/></label>
+      </div>
+      <fieldset class="space-y-2"><legend class="label flex items-center gap-2">중간 목표 <span class="text-xs font-normal text-muted-foreground">선택 — 구간마다 직선 경로</span></legend>
+        <div id="tmMiles" class="space-y-2"></div>${ro ? '' : '<button type="button" class="btn btn-ghost btn-sm text-primary" id="tmAddMile"><i data-lucide="plus"></i>중간 목표 추가</button>'}</fieldset>
+      <div class="space-y-2 rounded-lg border p-3"><div class="flex flex-wrap items-center justify-between gap-2 text-sm"><span class="font-medium">미리보기 — 계획 경로와 실적</span><span id="tmEffect" class="text-xs text-muted-foreground"></span></div><div id="tmChart"></div></div>
+      <p id="tmErr" class="text-sm text-destructive"></p>
+    </form>`,
+    footer: ro ? '<button type="button" class="btn btn-outline" data-close>닫기</button>' : `${orig ? '<button type="button" class="btn btn-ghost me-auto text-destructive" id="tmDelete"><i data-lucide="trash-2"></i>목표 삭제</button>' : ''}<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="tmSave">저장</button>`,
+    onMount: (el, close) => {
+      const q = s => el.querySelector(s);
+      const drawMiles = () => { q('#tmMiles').innerHTML = t.milestones.map((m, i) => `<div class="flex items-center gap-2"><input type="month" class="input h-8 w-40" data-mile-p="${i}" value="${toMonthInput(m.period)}" ${dsb}/><input class="input h-8 w-32 text-end tabular-nums" data-mile-v="${i}" value="${m.value ?? ''}" placeholder="값" ${dsb}/>${ro ? '' : `<button type="button" class="btn btn-ghost btn-icon" data-mile-del="${i}" aria-label="삭제"><i data-lucide="x"></i></button>`}</div>`).join('') || '<p class="text-xs text-muted-foreground">없음</p>'; lucide.createIcons(); };
+      const read = () => {
+        t.milestones = t.milestones.map((m, i) => ({ period: fromMonthInput(q(`[data-mile-p="${i}"]`)?.value) || m.period, value: num(q(`[data-mile-v="${i}"]`)?.value ?? m.value) }));
+        return { baselineFrom: fromMonthInput(q('#tmFrom').value), baselineTo: fromMonthInput(q('#tmTo').value), baselineValue: num(q('#tmBase').value), targetValue: num(q('#tmTarget').value), targetPeriod: fromMonthInput(q('#tmPeriod').value), milestones: [...t.milestones].filter(m => m.period && Number.isFinite(m.value)).sort((a, b) => a.period.localeCompare(b.period)), toleranceRatio: (num(q('#tmTol').value) ?? 10) / 100 };
+      };
+      const check = d => {
+        if (!d.baselineFrom || !d.baselineTo || d.baselineFrom > d.baselineTo) return '기준 기간을 확인하세요.';
+        if (!Number.isFinite(d.targetValue)) return '목표값을 입력하세요.';
+        if (!d.targetPeriod || d.targetPeriod <= d.baselineTo) return '목표 시점은 기준 기간 뒤여야 합니다.';
+        if (d.milestones.some(m => m.period <= d.baselineTo || m.period >= d.targetPeriod)) return '중간 목표 시점은 기준 기간과 목표 시점 사이여야 합니다.';
+        return '';
+      };
+      const preview = () => {
+        const d = read(), err = check(d);
+        q('#tmErr').textContent = err;
+        q('#tmSeasonal').classList.toggle('hidden', !(seasonal && d.baselineFrom && d.baselineTo && periodsBetween('MONTH', d.baselineFrom, d.baselineTo).length <= 3));
+        if (!d.baselineFrom || !d.baselineTo || d.baselineFrom > d.baselineTo) return err;
+        const calcTarget = { ...d, targetValue: Number.isFinite(d.targetValue) ? d.targetValue : 0, targetPeriod: d.targetPeriod > d.baselineTo ? d.targetPeriod : mKey(mIndex(d.baselineTo) + 1) };
+        const res = computeKpis({ kpis: [k], targets: { [k.key]: calcTarget }, items: P.items, values: P.values, cycle: 'MONTH', from: d.baselineFrom, to: [calcTarget.targetPeriod, LATEST_MONTH].sort().pop(), latestMonth: LATEST_MONTH, fx }).results[0];
+        const auto = d.baselineValue == null;
+        q('#tmBaseNote').innerHTML = auto ? (res.base == null ? '<span class="text-destructive">기준 기간 데이터가 모자랍니다. 기준값을 직접 입력하세요.</span>' : `데이터로 계산 ${fmtKpi(k, res.base, fx(2025))}`) : '<span class="text-warning-foreground">수기 기준값</span>';
+        const sc = v => v == null ? null : k.unit === 'AMOUNT' ? v / fx(2026) : v;
+        q('#tmChart').innerHTML = timeChart({ labels: res.periods.map(p => `${p.period.slice(2, 4)}.${p.period.slice(4)}`), lines: [{ name: '실적', values: res.periods.map(p => sc(p.value)), color: 'var(--chart-1)', dim: res.periods.map(p => p.status === 'PROVISIONAL') }, { name: '계획 경로', values: res.periods.map(p => sc(p.plan)), color: 'var(--muted-foreground)', dash: true, noDots: true, width: 1.5 }],
+          hlines: [{ value: sc(res.base), color: 'var(--muted-foreground)', label: '기준', dash: true }, ...(Number.isFinite(d.targetValue) ? [{ value: sc(d.targetValue), color: 'var(--primary)', label: '목표' }] : [])], height: 200, fmt: v => k.unit === 'AMOUNT' ? F.short(v) : (+v).toLocaleString('en-US', { maximumFractionDigits: k.decimals ?? 1 }) });
+        q('#tmEffect').textContent = k.ebitda.method === 'NONE' ? '모니터링 KPI — EBITDA로 환산하지 않습니다' : res.targetAnnualized != null && Number.isFinite(d.targetValue) ? `목표 시 연환산 EBITDA 효과 ${F.short(res.targetAnnualized)}` : '';
+        return err;
+      };
+      drawMiles(); preview();
+      el.addEventListener('input', preview); el.addEventListener('change', preview);
+      el.addEventListener('click', e => {
+        if (e.target.closest('#tmAddMile')) { read(); t.milestones.push({ period: '', value: null }); drawMiles(); }
+        const del = e.target.closest('[data-mile-del]'); if (del) { read(); t.milestones.splice(+del.dataset.mileDel, 1); drawMiles(); preview(); }
+      });
+      q('#tmSave')?.addEventListener('click', () => {
+        const d = read(); if (preview()) return;
+        P.targets[key] = { ...d, updatedAt: stampNow(), updatedBy: '홍길동' };
+        (P.targetHistory[key] ||= []).push(P.targets[key]);
+        persist(); close(); render(); toast('저장했습니다. 목표 이력에 남습니다.');
+      });
+      q('#tmDelete')?.addEventListener('click', () => confirmModal(`"${esc(k.name)}"의 목표를 삭제합니다. 병원정보에서 이 KPI는 "목표 없음"이 됩니다.`, () => { delete P.targets[key]; persist(); close(); render(); toast('삭제했습니다.'); }, { okLabel: '삭제', destructive: true, title: '목표 삭제' }));
+    },
+  });
+}
+function targetHistoryModal(key) {
+  const k = kpiOf(key), list = [...(P.targetHistory[key] || [])].reverse();
+  openModal({ title: `목표 이력 — ${esc(k.name)}`, size: 'max-w-xl',
+    body: `<ul class="divide-y rounded-lg border text-sm">${list.map(h => `<li class="space-y-0.5 px-3 py-2"><div class="flex justify-between"><b>목표 ${fmtKpi(k, h.targetValue, fx(2026))} · ${h.targetPeriod.slice(0, 4)}.${h.targetPeriod.slice(4)}</b><span class="text-xs text-muted-foreground">${h.updatedAt} · ${esc(h.updatedBy)}</span></div><div class="text-xs text-muted-foreground">기준 ${h.baselineFrom}~${h.baselineTo}${h.baselineValue != null ? ` (수기 ${h.baselineValue})` : ''} · 중간 목표 ${h.milestones.length}개 · 허용 오차 ${F.pct(h.toleranceRatio, 0)}</div></li>`).join('')}</ul>`,
+    footer: '<button type="button" class="btn btn-outline" data-close>닫기</button>' });
+}
+
+/* ---------- 데이터 항목 ---------- */
+function itemTab() {
+  const users = k => P.kpis.filter(x => [...kpiItemKeys(x), ...subItemKeys(x)].includes(k));
+  const rows = P.items.map(i => {
+    const us = users(i.key), last = Object.entries(P.values).filter(([key, v]) => key.startsWith(i.key + '|') && v.source === 'INTERFACE').map(([, v]) => v.updatedAt).sort().pop();
+    return `<tr class="border-b last:border-0 ${us.some(x => x.enabled) ? '' : 'text-muted-foreground'}">
+      <td class="td font-mono text-xs">${i.key}</td><td class="td font-medium">${esc(i.name)}${i.seed ? '' : ' <span class="badge badge-warning ms-1">추가</span>'}</td>
+      <td class="td">${unitText(i)}</td><td class="td">${AGGREGATION[i.aggregation]}</td><td class="td">${CYCLE_LABEL[i.cycle]}</td>
+      <td class="td"><span class="inline-flex items-center gap-1.5"><i data-lucide="${COLLECTION[i.collectionMethod].icon}" class="size-3.5"></i>${COLLECTION[i.collectionMethod].label}${i.interfaceFrom ? ` <span class="text-xs text-muted-foreground">${i.interfaceFrom}~</span>` : ''}</span></td>
+      <td class="td text-xs">${esc(i.sourceSystem)}</td>
+      <td class="td text-xs">${i.cycle === 'WEEK' ? `다음 주 ${'일월화수목금토'[i.deadline.weekday ?? 3]}요일` : `다음 ${i.cycle === 'QUARTER' ? '분기 첫 달' : '달'} ${i.deadline.dayOfMonth ?? 10}일`}</td>
+      <td class="td max-w-[200px] truncate text-xs" title="${us.map(x => esc(x.name)).join(', ')}">${us.map(x => esc(x.name)).join(', ') || '-'}</td>
+      <td class="td text-xs">${i.collectionMethod === 'INTERFACE' ? (last ? `<span class="inline-flex items-center gap-1 text-success"><i data-lucide="circle-check" class="size-3"></i>${last}</span>` : '<span class="text-muted-foreground">수신 전</span>') : '-'}</td>
+      <td class="td text-end"><button type="button" class="btn btn-ghost btn-icon" data-item-edit="${i.key}" aria-label="${canEdit() ? '편집' : '보기'}"><i data-lucide="${canEdit() ? 'pencil' : 'eye'}"></i></button></td></tr>`;
+  }).join('');
+  return readOnlyNote() + card('데이터 항목', `병원에서 받는 원자료 ${P.items.length}개입니다. 흐린 행은 사용 중인 KPI가 쓰지 않는 항목입니다. 병원 IT 요청 목록은 docs/10-hospital-data-interface.md.`, `
+    <div class="overflow-x-auto"><table class="w-full min-w-[1100px] text-sm"><thead><tr class="border-b"><th class="th">key</th><th class="th">이름</th><th class="th">단위</th><th class="th">집계</th><th class="th">수집 주기</th><th class="th">수집 방식</th><th class="th">출처</th><th class="th">입력 기한</th><th class="th">쓰는 KPI</th><th class="th">연동 상태</th><th class="th text-end">관리</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+    canEdit() ? '<button type="button" class="btn btn-default btn-sm" id="addItem"><i data-lucide="plus"></i>데이터 항목 추가</button>' : '');
+}
+function itemModal(key) {
+  const orig = key ? itemOf(key) : null, ro = !canEdit();
+  const it = orig ? structuredClone(orig) : { key: '', name: '', unit: '건', aggregation: 'SUM', cycle: 'MONTH', collectionMethod: 'MANUAL', sourceSystem: '', referenceDateNote: '', denominatorItemKey: null, interfaceFrom: null, deadline: { dayOfMonth: 10 }, allowNegative: false, seed: false };
+  const dsb = ro ? 'disabled' : '', lock = it.seed || ro ? 'disabled' : '';
+  openModal({
+    title: orig ? (ro ? '데이터 항목 보기' : '데이터 항목 편집') : '데이터 항목 추가', size: 'max-w-2xl', desc: it.seed ? '기본 항목은 key·단위·집계 방식을 바꿀 수 없습니다.' : '',
+    body: `<form class="space-y-4" onsubmit="return false">
+      <div class="grid gap-4 sm:grid-cols-3">
+        <label class="block space-y-1.5"><span class="label">key <span class="text-destructive">*</span></span><input id="imKey" class="input font-mono text-xs" value="${esc(it.key)}" placeholder="SURGERY_CASES" ${orig ? 'disabled' : ''}/></label>
+        <label class="block space-y-1.5 sm:col-span-2"><span class="label">이름 <span class="text-destructive">*</span></span><input id="imName" class="input" maxlength="30" value="${esc(it.name)}" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="label">단위</span><input id="imUnit" class="input" value="${esc(it.unit)}" placeholder="건 / 명 / AMOUNT" ${lock}/></label>
+        <label class="block space-y-1.5"><span class="label">집계</span><select id="imAgg" class="select" ${lock}>${Object.entries(AGGREGATION).map(([a, b]) => `<option value="${a}" ${a === it.aggregation ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
+        <label class="block space-y-1.5"><span class="label">수집 주기</span><select id="imCycle" class="select" ${dsb}>${['WEEK', 'MONTH', 'QUARTER'].map(c => `<option value="${c}" ${c === it.cycle ? 'selected' : ''}>${CYCLE_LABEL[c]}</option>`).join('')}</select></label>
+      </div>
+      <fieldset class="space-y-2"><legend class="label">수집 방식</legend><div class="grid gap-2 sm:grid-cols-3">${Object.entries(COLLECTION).map(([v, c]) => `<label class="flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-accent/60"><input type="radio" name="imMethod" value="${v}" class="size-4" ${it.collectionMethod === v ? 'checked' : ''} ${dsb}/><i data-lucide="${c.icon}" class="size-4"></i>${c.label}</label>`).join('')}</div>
+        <div id="imIfaceWrap" class="${it.collectionMethod === 'INTERFACE' ? '' : 'hidden'} space-y-1"><label class="flex items-center gap-2 text-sm">연동 시작 기간 <input id="imIfaceFrom" class="input h-8 w-36 font-mono text-xs" value="${esc(it.interfaceFrom ?? '')}" placeholder="${it.cycle === 'WEEK' ? '2026-W45' : '202611'}" ${dsb}/></label>
+          <p class="text-xs text-muted-foreground">이 기간부터 칸이 잠기고 연동 값을 씁니다. 그 전 기간은 입력한 값을 그대로 쓰고, 연동 값이 들어오면 "연동 값 차이"로 보여 줍니다(D25).</p></div></fieldset>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label class="block space-y-1.5"><span class="label">출처 시스템</span><input id="imSrc" class="input" value="${esc(it.sourceSystem)}" placeholder="HIS, 원무·회계" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="label">기준 날짜</span><input id="imRef" class="input" value="${esc(it.referenceDateNote)}" placeholder="퇴원일, 청구월, 월말" ${dsb}/></label>
+        <label class="block space-y-1.5"><span class="label">입력 기한</span><span class="flex items-center gap-2 text-sm" id="imDeadline"></span></label>
+        <label class="block space-y-1.5"><span class="label">분모 항목 <span class="text-xs font-normal text-muted-foreground">분자 ≤ 분모 검증</span></span><select id="imDen" class="select" ${dsb}><option value="">없음</option>${P.items.filter(i => i.key !== it.key).map(i => `<option value="${i.key}" ${it.denominatorItemKey === i.key ? 'selected' : ''}>${esc(i.name)}</option>`).join('')}</select></label>
+      </div>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="imNeg" class="size-4" ${it.allowNegative ? 'checked' : ''} ${dsb}/>음수 허용 (조정액·페널티)</label>
+      <p id="imErr" class="text-sm text-destructive"></p>
+    </form>`,
+    footer: ro ? '<button type="button" class="btn btn-outline" data-close>닫기</button>' : '<button type="button" class="btn btn-outline" data-close>취소</button><button type="button" class="btn btn-default" id="imSave">저장</button>',
+    onMount: (el, close) => {
+      const q = s => el.querySelector(s);
+      const drawDeadline = () => {
+        const c = q('#imCycle').value;
+        q('#imDeadline').innerHTML = c === 'WEEK' ? `다음 주 <select id="imDl" class="select h-8 w-24" ${dsb}>${[1, 2, 3, 4, 5].map(d => `<option value="${d}" ${(it.deadline.weekday ?? 3) === d ? 'selected' : ''}>${'일월화수목금토'[d]}요일</option>`).join('')}</select>` : `다음 ${c === 'QUARTER' ? '분기 첫 달' : '달'} <input id="imDl" class="input h-8 w-16 text-end" value="${it.deadline.dayOfMonth ?? 10}" ${dsb}/>일`;
+      };
+      drawDeadline();
+      el.addEventListener('change', e => { if (e.target.id === 'imCycle') drawDeadline(); q('#imIfaceWrap').classList.toggle('hidden', q('input[name="imMethod"]:checked').value !== 'INTERFACE'); });
+      q('#imSave')?.addEventListener('click', () => {
+        const d = { ...it, key: (q('#imKey').value || '').trim().toUpperCase(), name: q('#imName').value.trim(), unit: q('#imUnit').value.trim() || it.unit, aggregation: q('#imAgg').value, cycle: q('#imCycle').value,
+          collectionMethod: q('input[name="imMethod"]:checked').value, sourceSystem: q('#imSrc').value.trim(), referenceDateNote: q('#imRef').value.trim(), denominatorItemKey: q('#imDen').value || null, allowNegative: q('#imNeg').checked,
+          deadline: q('#imCycle').value === 'WEEK' ? { weekday: +q('#imDl').value } : { dayOfMonth: +q('#imDl').value || 10 } };
+        d.interfaceFrom = d.collectionMethod === 'INTERFACE' ? (q('#imIfaceFrom').value.trim() || (d.cycle === 'WEEK' ? nextWeek(isoWeekKey(new Date(Date.parse(MOCK_TODAY)))) : mKey(mIndex(LATEST_MONTH) + 1))) : null;
+        let err = '';
+        if (!/^[A-Z][A-Z0-9_]*$/.test(d.key)) err = 'key는 영문 대문자·숫자·밑줄로 씁니다.';
+        else if (!orig && itemOf(d.key)) err = '같은 key가 있습니다.';
+        else if (!d.name) err = '이름을 입력하세요.';
+        else if (d.interfaceFrom && !(d.cycle === 'WEEK' ? /^\d{4}-W\d{2}$/ : d.cycle === 'QUARTER' ? /^\d{4}Q[1-4]$/ : /^\d{6}$/).test(d.interfaceFrom)) err = '연동 시작 기간 형식을 확인하세요.';
+        else { const users = P.kpis.filter(x => formulaItemKeys(x).includes(d.key) && CYCLE_ORDER[x.cycle] < CYCLE_ORDER[d.cycle]); if (users.length) err = `${users.map(x => x.name).join(', ')} KPI의 측정 주기보다 수집 주기가 깁니다.`; }
+        if (err) { q('#imErr').textContent = err; return; }
+        if (orig) Object.assign(orig, d); else P.items.push(d);
+        persist(); close(); render(); toast('저장했습니다.');
+      });
+    },
+  });
+}
+
+/* ---------- 그리기·이벤트 ---------- */
+const TAB_RENDER = { input: inputTab, kpis: kpiTab, targets: targetTab, items: itemTab };
+function render() {
+  const sy = window.scrollY;
+  page.innerHTML = `<div class="space-y-4">${renderTop()}<div class="space-y-6">${TAB_RENDER[state.tab]()}</div></div>`;
+  lucide.createIcons();
+  window.scrollTo(0, sy);
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab],[data-incycle],[data-shift],[data-cell],#inputSave,#inputReset,#downloadTpl,[data-kpi-toggle],[data-kpi-move],[data-kpi-edit],[data-kpi-delete],#addKpi,[data-target-edit],[data-target-history],[data-item-edit],#addItem');
+  if (!t) return;
+  const leave = fn => { if (Object.keys(state.edits).length && (t.dataset.tab || t.dataset.incycle || t.dataset.shift)) confirmModal('저장하지 않은 변경 내용이 있습니다. 이동할까요?', () => { state.edits = {}; fn(); render(); }); else { fn(); render(); } };
+  if (t.dataset.tab) leave(() => { state.tab = t.dataset.tab; history.replaceState(null, '', '#' + state.tab); });
+  else if (t.dataset.incycle) leave(() => { state.cycle = t.dataset.incycle; });
+  else if (t.dataset.shift) leave(() => shiftEnd(+t.dataset.shift));
+  else if (t.dataset.cell) cellModal(t.dataset.cell);
+  else if (t.id === 'inputSave') saveInputs();
+  else if (t.id === 'inputReset') { state.edits = {}; render(); }
+  else if (t.id === 'downloadTpl') downloadTemplate();
+  else if (t.dataset.kpiToggle && canEdit()) { const k = kpiOf(t.dataset.kpiToggle); k.enabled = !k.enabled; persist(); render(); toast(k.enabled ? `${k.name}을(를) 켰습니다.` : `${k.name}을(를) 껐습니다. 데이터는 남습니다.`); }
+  else if (t.dataset.kpiMove) { const [i, d] = t.dataset.kpiMove.split(':').map(Number); [P.kpis[i], P.kpis[i + d]] = [P.kpis[i + d], P.kpis[i]]; persist(); render(); }
+  else if (t.dataset.kpiEdit) kpiModal(t.dataset.kpiEdit);
+  else if (t.dataset.kpiDelete) { const k = kpiOf(t.dataset.kpiDelete); confirmModal(`"${esc(k.name)}" KPI를 삭제합니다. 데이터 항목과 입력한 값은 남습니다.`, () => { P.kpis = P.kpis.filter(x => x !== k); delete P.targets[k.key]; persist(); render(); toast('삭제했습니다.'); }, { okLabel: '삭제', destructive: true, title: 'KPI 삭제' }); }
+  else if (t.id === 'addKpi') addKpiModal();
+  else if (t.dataset.targetEdit) targetModal(t.dataset.targetEdit);
+  else if (t.dataset.targetHistory) targetHistoryModal(t.dataset.targetHistory);
+  else if (t.dataset.itemEdit) itemModal(t.dataset.itemEdit);
+  else if (t.id === 'addItem') itemModal(null);
+});
+/* 입력 칸 — 다시 그리면 포커스를 잃으므로 칸 테두리와 저장 막대만 바꾸고, 칸을 떠날 때 다시 그린다 */
+document.addEventListener('input', e => {
+  const k = e.target.dataset.input; if (!k) return;
+  const v = P.values[k], [ik, cycle] = k.split('|'), item = itemOf(ik);
+  if (fmtRaw(item, v?.value) === e.target.value || (!v && e.target.value === '')) delete state.edits[k]; else state.edits[k] = e.target.value;
+  updateInputStatus();
+});
+document.addEventListener('keydown', e => {
+  const k = e.target.dataset?.input; if (!k || e.key !== 'Enter') return;
+  e.preventDefault();
+  const inputs = [...document.querySelectorAll('[data-input]')], cols = document.querySelector('thead tr').children.length - 1, i = inputs.indexOf(e.target);
+  const row = e.target.closest('tr'), cellIdx = [...row.children].indexOf(e.target.closest('td'));
+  const rows = [...document.querySelectorAll('tbody tr')], ri = rows.indexOf(row);
+  for (let r = ri + (e.shiftKey ? -1 : 1); r >= 0 && r < rows.length; r += e.shiftKey ? -1 : 1) { const tgt = rows[r].children[cellIdx]?.querySelector('[data-input]'); if (tgt) { tgt.focus(); tgt.select(); return; } }
+});
+/* 엑셀에서 복사한 범위 붙여넣기 — 칸을 기준으로 오른쪽·아래로 채운다 */
+document.addEventListener('paste', e => {
+  const k = e.target.dataset?.input; if (!k) return;
+  const text = e.clipboardData.getData('text'); if (!/[\t\n]/.test(text)) return;
+  e.preventDefault();
+  const rows = [...document.querySelectorAll('tbody tr')], row = e.target.closest('tr'), ri = rows.indexOf(row), ci = [...row.children].indexOf(e.target.closest('td'));
+  text.trim().split(/\r?\n/).forEach((line, dr) => line.split('\t').forEach((val, dc) => { const inp = rows[ri + dr]?.children[ci + dc]?.querySelector('[data-input]'); if (inp) state.edits[inp.dataset.input] = val.trim(); }));
+  render();
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'roleSelect') { state.role = e.target.value; render(); toast(state.role === 'CUSTOMER_DEVELOPER' ? '고객 개발자 — 데이터 입력만 할 수 있습니다.' : '고객 관리자 — 모든 설정을 편집할 수 있습니다.'); }
+  if (e.target.id === 'uploadFile' && e.target.files[0]) uploadFile(e.target.files[0]);
+});
+
+render();
+</script>
+</body>
+</html>

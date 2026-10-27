@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>병원정보 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
+<script src="shared.js"></script>
+<script src="engine.js"></script>
+<script src="kpi-engine.js"></script>
+<script src="perf-data.js"></script>
+<script src="guide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<script>
+const page = mountShell({
+  active: 'performance', title: '병원정보', guide: 'performance',
+  footer: '시안 + 프로토타입 — KPI·EBITDA 효과는 이 화면 안에서 계산합니다. 데이터는 VISTA 예시값이며, 성과 설정에서 입력·수정한 값이 바로 반영됩니다.',
+});
+
+const HID = 'vista';
+const H = loadHospitals().find(h => h.id === HID);
+useCurrency(H);
+let P = loadPerf(HID);
+
+const RANGES = {
+  journey: { label: '전체 여정 (2025.01~2026.12)', from: '202501', to: '202612' },
+  recent12: { label: '최근 12개월', from: mKey(mIndex(LATEST_MONTH) - 11), to: LATEST_MONTH },
+  y2026: { label: '2026년', from: '202601', to: '202612' },
+  y2025: { label: '2025년', from: '202501', to: '202512' },
+};
+const params = new URLSearchParams(location.search);
+const state = { cycle: params.get('cycle') === 'QUARTER' ? 'QUARTER' : 'MONTH', range: 'journey', kpi: params.get('kpi'), category: '', status: '', period: null };
+const fx = year => fxRate(H, year);
+const toCycle = (cycle, m) => cycle === 'MONTH' ? m : periodOfMonth(cycle, m);
+
+/* 계산 — 요약은 기준 기간부터 목표 시점까지 전체로, 그래프·표는 고른 기간으로 */
+function compute() {
+  const r = RANGES[state.range];
+  const base = { kpis: P.kpis, targets: P.targets, items: P.items, values: P.values, latestMonth: LATEST_MONTH, fx };
+  const tgts = Object.values(P.targets);
+  const allFrom = tgts.map(t => t.baselineFrom).sort()[0] || '202501', allTo = [LATEST_MONTH, ...tgts.map(t => t.targetPeriod)].sort().pop();
+  return {
+    full: computeKpis({ ...base, cycle: state.cycle, from: toCycle(state.cycle, allFrom), to: toCycle(state.cycle, allTo) }),
+    view: computeKpis({ ...base, cycle: state.cycle, from: toCycle(state.cycle, r.from), to: toCycle(state.cycle, r.to) }),
+  };
+}
+
+const card = (title, desc, body, right = '', help = '') => `<section class="card"><div class="card-header flex-row flex-wrap items-start justify-between gap-3 pb-4"><div class="space-y-1.5"><h2 class="card-title flex items-center gap-1.5">${title}${tip(help)}</h2>${desc ? `<p class="card-desc">${desc}</p>` : ''}</div>${right}</div><div class="card-content space-y-4">${body}</div></section>`;
+const statusBadge = s => `<span class="badge ${KPI_STATUS[s].cls}">${KPI_STATUS[s].label}</span>`;
+const signed = v => v == null ? '-' : `${v > 0 ? '+' : ''}${F.short(v)}`;
+const periodName = p => periodLabel(state.cycle, p);
+const itemName = k => P.items.find(i => i.key === k)?.name ?? k;
+const pctBar = (v, cls = 'bg-primary') => `<div class="h-1.5 overflow-hidden rounded-full bg-muted"><div class="h-full rounded-full ${cls}" style="width:${Math.max(0, Math.min(100, (v ?? 0) * 100))}%"></div></div>`;
+const kpiColor = i => tone(i);
+
+/* ---------- 조회 조건 ---------- */
+function filterBar() {
+  const miss = missingCells(P), overdue = miss.filter(m => m.overdue).length, soon = miss.length - overdue;
+  const hasWeekly = P.kpis.some(k => k.enabled && k.cycle === 'WEEK');
+  return `<section class="card"><div class="flex flex-col gap-4 p-6 lg:flex-row lg:items-end lg:justify-between">
+    <div class="flex flex-wrap items-end gap-4">
+      <div class="space-y-1.5"><span class="label">주기</span><div class="tabs-list" role="tablist">
+        <button type="button" class="tabs-trigger" role="tab" disabled title="주 단위로 재는 KPI가 없습니다" data-state="inactive" style="opacity:.45">주</button>
+        ${['MONTH', 'QUARTER'].map(c => `<button type="button" class="tabs-trigger" role="tab" data-cycle="${c}" data-state="${state.cycle === c ? 'active' : 'inactive'}">${CYCLE_LABEL[c]}</button>`).join('')}</div></div>
+      <label class="space-y-1.5"><span class="label">기간</span><select id="rangeSelect" class="select w-60">${Object.entries(RANGES).map(([k, r]) => `<option value="${k}" ${state.range === k ? 'selected' : ''}>${r.label}</option>`).join('')}</select></label>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <span class="flex items-center gap-1.5 text-muted-foreground"><i data-lucide="plug" class="size-4"></i>연동 ${lastReceived(P) ?? '-'} 수신 · 기준일 ${MOCK_TODAY}</span>
+      ${overdue ? `<span class="badge badge-destructive">누락 ${overdue}</span>` : ''}${soon ? `<span class="badge badge-warning">기한 임박 ${soon}</span>` : ''}
+      ${miss.length ? `<a href="kpi-setting.html#input" class="btn btn-outline btn-sm"><i data-lucide="pencil-line"></i>데이터 입력</a>` : ''}
+    </div></div></section>`;
+}
+
+/* ---------- EBITDA 개선 여정 ---------- */
+function journeyCard(full, view) {
+  const s = full.summary, ratio = s.targetAnnualizedEffect ? s.annualizedEffect / s.targetAnnualizedEffect : null;
+  const stat = (label, value, sub, help, strong) => `<div class="space-y-1.5 rounded-lg border p-4 ${strong ? 'border-primary/40 bg-accent/40' : ''}">
+    <div class="flex items-center gap-1 text-sm text-muted-foreground">${label}${help}</div><div class="text-2xl font-bold tracking-tight tabular-nums">${value}</div><div class="text-xs text-muted-foreground">${sub}</div></div>`;
+  const chips = Object.entries(s.statusCounts).filter(([, n]) => n).map(([k, n]) => `<button type="button" data-status-filter="${k}" class="badge ${KPI_STATUS[k].cls} ${state.status === k ? 'ring-2 ring-ring/50' : ''}">${KPI_STATUS[k].label} ${n}</button>`).join(' ');
+  const res = view.results, keys = view.keys;
+  const bars = res.filter(r => r.kpi.ebitda.method !== 'NONE').map(r => ({ name: r.kpi.name, color: kpiColor(P.kpis.indexOf(r.kpi)), values: r.periods.map(p => p.ebitdaEffect), dim: r.periods.map(p => p.status === 'PROVISIONAL') }));
+  let run = 0, prun = 0;
+  const cum = keys.map((k, i) => { const v = res.reduce((a, r) => a + (r.periods[i].ebitdaEffect || 0), 0); const any = res.some(r => r.periods[i].ebitdaEffect != null); if (!any) return null; run += v; return run; });
+  const planCum = keys.map((k, i) => { const v = res.reduce((a, r) => a + (r.periods[i].planEffect ?? (r.periods[i].future && r.periods[i].plan != null && r.periods.slice(0, i).reverse().find(x => x.vars) ? planEffectFuture(r, i) : 0)), 0); if (!res.some(r => r.periods[i].plan != null)) return null; prun += v; return prun; });
+  const anyProv = res.some(r => r.periods.some(p => p.status === 'PROVISIONAL'));
+  const labels = keys.map(k => state.cycle === 'MONTH' ? `${k.slice(2, 4)}.${k.slice(4)}` : periodName(k));
+  /* 누적과 기간별 효과는 크기가 달라 그래프를 나눈다 — 한 축에 두면 기간별 막대가 보이지 않는다 */
+  const chart = `<div class="grid gap-4 lg:grid-cols-2">
+    <div class="space-y-1"><div class="text-sm font-medium">누적 효과 vs 계획</div>${timeChart({ labels, keys, selected: state.period, lines: [{ name: '누적 효과', values: cum, color: 'var(--chart-1)', width: 2.5 }, { name: '계획 누적', values: planCum, color: 'var(--muted-foreground)', dash: true, width: 1.5, noDots: true }], height: 240 })}</div>
+    <div class="space-y-1"><div class="text-sm font-medium">기간별 효과 (KPI별)</div>${timeChart({ labels, keys, selected: state.period, bars, height: 240 })}</div></div>`;
+  return card(`EBITDA 개선 여정${term('EBITDA 효과')}`, `기준 기간 대비 KPI 개선을 EBITDA로 환산한 값 · 단위 ${CUR.unit}${H.currency !== H.report ? ` (병원 통화 ${H.currency}를 연도별 고정 환율로 환산)` : ''}`, `
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      ${stat('누적 효과', F.short(s.cumulativeEffect), `기준 이후 확정 ${s.periodsCounted}개 기간${s.periodsMissing ? ` · 누락 ${s.periodsMissing}` : ''}`, term('EBITDA 효과'), true)}
+      <div class="space-y-1.5 rounded-lg border p-4"><div class="flex items-center gap-1 text-sm text-muted-foreground">연환산 효과 / 목표${term('연환산')}</div>
+        <div class="text-2xl font-bold tracking-tight tabular-nums">${F.short(s.annualizedEffect)} <span class="text-base font-medium text-muted-foreground">/ ${s.targetAnnualizedEffect ? F.short(s.targetAnnualizedEffect) : '-'}</span></div>
+        ${pctBar(ratio)}<div class="text-xs text-muted-foreground">목표 효과 대비 ${ratio != null ? F.pct(ratio, 0) : '-'} · 최근 3개 확정 기간 기준</div></div>
+      ${stat('현금흐름 효과', F.short(s.cashEffect), 'AR일수 단축으로 풀린 현금 · EBITDA 아님', term('현금흐름 효과'))}
+      <div class="space-y-2 rounded-lg border p-4"><div class="text-sm text-muted-foreground">KPI 상태</div><div class="flex flex-wrap gap-1.5">${chips}</div><div class="text-xs text-muted-foreground">누르면 아래 KPI 현황을 거릅니다</div></div>
+    </div>
+    ${legend([{ name: '누적 효과', color: 'var(--chart-1)', line: true }, { name: '계획 누적', color: 'var(--muted-foreground)', line: true }, ...bars.map(b => ({ name: b.name, color: b.color }))])}
+    ${chart}
+    <p class="text-xs text-muted-foreground">왼쪽은 기준 이후 누적 효과와 계획 경로대로 갔을 때의 누적, 오른쪽은 기간별 효과(KPI별 쌓기${anyProv ? ', 흐린 막대는 잠정 값' : ''})입니다. 기간을 누르면 KPI 상세의 표가 그 기간을 강조합니다. 30일 재입원율은 EBITDA로 환산하지 않습니다(D30).</p>`,
+    `<span class="badge badge-outline">${state.cycle === 'MONTH' ? '월' : '분기'} 단위</span>`, '기준 기간 대비 개선을 금액으로 본 것으로, 병원 전체 EBITDA가 아닙니다.');
+}
+/* 미래 기간의 계획 효과 — 마지막 확정 기간의 규모 데이터로 계산한다 */
+function planEffectFuture(r, i) {
+  const ref = r.periods.slice(0, i).reverse().find(x => x.vars);
+  const p = r.periods[i];
+  const e = ebitdaEffect(r.kpi, p.plan, r.base, ref.vars);
+  return e == null ? 0 : e / ref.fx;
+}
+
+/* ---------- KPI 현황 ---------- */
+function kpiGrid(full) {
+  const list = full.results.filter(r => (!state.category || r.kpi.category === state.category) && (!state.status || r.status === state.status));
+  const filters = `<div class="flex flex-wrap items-center gap-2">${[['', '전체'], ...Object.entries(KPI_CATEGORY)].map(([k, l]) => `<button type="button" data-cat="${k}" class="btn btn-sm ${state.category === k ? 'btn-secondary' : 'btn-ghost'}">${l}</button>`).join('')}
+    ${state.status ? `<button type="button" data-status-filter="" class="btn btn-ghost btn-sm text-primary"><i data-lucide="x"></i>상태: ${KPI_STATUS[state.status].label}</button>` : ''}</div>`;
+  const cards = list.map(r => {
+    const k = r.kpi, cur = r.current, prev = cur ? [...r.periods].slice(0, r.periods.indexOf(cur)).reverse().find(p => p.value != null) : null;
+    const fxv = cur?.fx ?? fx(2026), dir = k.direction === 'DOWN' ? -1 : 1;
+    const delta = cur && prev ? cur.value - prev.value : null;
+    const good = delta != null && delta * dir > 0;
+    const sel = state.kpi === k.key;
+    const vals = r.periods.filter(p => !p.future);
+    const spark = timeChart({ labels: vals.map(() => ''), lines: [{ name: '실적', values: vals.map(p => p.value), color: kpiColor(P.kpis.indexOf(k)), dim: vals.map(p => p.status === 'PROVISIONAL'), width: 2, noDots: true }, { name: '계획', values: vals.map(p => p.plan), color: 'var(--muted-foreground)', dash: true, width: 1.2, noDots: true }], height: 90, fmt: () => '' });
+    const prov = r.latest && r.latest !== cur ? `<span class="text-xs italic text-muted-foreground">(잠정 ${fmtKpi(k, r.latest.value, r.latest.fx ?? fxv)})</span>` : '';
+    const sources = [...new Set(formulaItemKeys(k).map(x => P.items.find(i => i.key === x)?.collectionMethod))];
+    const srcIcon = sources.length > 1 ? 'shuffle' : COLLECTION[sources[0]]?.icon || 'pencil';
+    const lastEff = [...r.periods].reverse().find(p => p.ebitdaEffect != null && !p.future);
+    return `<button type="button" data-kpi="${k.key}" class="card flex flex-col gap-2 p-4 text-start transition-colors ${sel ? 'ring-2 ring-primary/50' : 'hover:bg-accent/30'}">
+      <span class="flex w-full items-center gap-1.5"><span class="min-w-0 flex-1 truncate font-semibold">${esc(k.name)}</span><i data-lucide="${srcIcon}" class="size-3.5 text-muted-foreground" title="${sources.map(s => COLLECTION[s]?.label).join(' · ')}"></i>${statusBadge(r.status)}</span>
+      <span class="flex flex-wrap items-baseline gap-x-2"><span class="text-2xl font-bold tabular-nums">${cur ? fmtKpi(k, cur.value, fxv) : '-'}</span>
+        ${delta != null ? `<span class="text-xs tabular-nums ${good ? 'text-success' : 'text-destructive'}">${delta > 0 ? '▲' : '▼'} ${fmtKpi(k, Math.abs(delta), fxv)}</span>` : ''}${prov}</span>
+      <span class="text-xs text-muted-foreground">${cur ? periodName(cur.period) + ' 확정' : '확정 값 없음'} · <span class="badge badge-outline px-1.5 py-0 text-[10px]">${KPI_CATEGORY[k.category]}</span></span>
+      ${r.target ? `<span class="space-y-1"><span class="flex justify-between text-xs"><span class="text-muted-foreground">기준 ${fmtKpi(k, r.base, fxv)} → 목표 ${fmtKpi(k, r.target.targetValue, fxv)} (${r.target.targetPeriod.slice(0, 4)}.${r.target.targetPeriod.slice(4)})</span><b class="tabular-nums">${r.progress != null ? F.pct(r.progress, 0) : '-'}</b></span>${pctBar(r.progress, r.status === 'BEHIND' ? 'bg-destructive' : 'bg-primary')}</span>`
+        : `<span class="text-xs text-muted-foreground">목표 없음 · <a href="kpi-setting.html#targets" class="text-primary">성과 설정</a></span>`}
+      <span class="-mx-1">${spark}</span>
+      <span class="flex items-center justify-between text-xs"><span class="text-muted-foreground">${lastEff ? periodName(lastEff.period) + ' 효과' : ''}</span><b class="tabular-nums">${k.ebitda.method === 'NONE' ? '<span class="font-normal text-muted-foreground">모니터링 — EBITDA로 환산하지 않음</span>' : signed(lastEff?.ebitdaEffect)}</b></span>
+    </button>`;
+  }).join('');
+  return `<section class="space-y-3"><div class="flex flex-wrap items-center justify-between gap-2"><h2 class="flex items-center gap-1.5 font-semibold">KPI 현황 <span class="text-sm font-normal text-muted-foreground">${list.length}개</span>${tip('카드를 누르면 아래 KPI 상세가 바뀝니다. 진척률은 (현재 − 기준) ÷ (목표 − 기준)입니다.')}</h2>${filters}</div>
+    ${list.length ? `<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">${cards}</div>` : '<p class="text-sm text-muted-foreground">조건에 맞는 KPI가 없습니다.</p>'}</section>`;
+}
+
+/* ---------- KPI 상세 ---------- */
+function detailCard(view) {
+  const r = view.results.find(x => x.kpiKey === state.kpi) || view.results[0];
+  if (!r) return '';
+  const k = r.kpi, keys = view.keys, periods = r.periods, fxv = fx(2026);
+  const tol = r.target ? (r.target.toleranceRatio ?? 0.1) * Math.abs(r.target.targetValue - r.base) : null;
+  const scale = v => k.unit === 'AMOUNT' && v != null ? v / fxv : v;
+  const chart = timeChart({ labels: keys.map(p => state.cycle === 'MONTH' ? `${p.slice(2, 4)}.${p.slice(4)}` : periodName(p)), keys, selected: state.period,
+    lines: [{ name: '실적', values: periods.map(p => scale(p.value)), color: kpiColor(P.kpis.indexOf(k)), dim: periods.map(p => p.status === 'PROVISIONAL') }, { name: '계획 경로', values: periods.map(p => scale(p.plan)), color: 'var(--muted-foreground)', dash: true, width: 1.5, noDots: true }],
+    band: tol != null ? { lo: periods.map(p => p.plan == null ? null : scale(p.plan - tol)), hi: periods.map(p => p.plan == null ? null : scale(p.plan + tol)) } : null,
+    hlines: [{ value: scale(r.base), color: 'var(--muted-foreground)', label: '기준', dash: true }, ...(r.target ? [{ value: scale(r.target.targetValue), color: 'var(--primary)', label: '목표' }] : [])],
+    fmt: v => k.unit === 'AMOUNT' ? F.short(v) : (+v).toLocaleString('en-US', { maximumFractionDigits: k.decimals ?? 1 }), height: 240 });
+  const changes = (P.kpiHistory[k.key] || []).map(h => `${h.changedAt.slice(0, 7).replace('-', '.')} ${h.changes.map(c => `${c.field} ${c.before}→${c.after}`).join(', ')}`);
+  const shown = periods.filter(p => !p.future);
+  const cell = (p, v, fmtv) => `<td class="td num ${state.period === p.period ? 'bg-accent/60' : ''} ${p.status === 'PROVISIONAL' ? 'italic text-muted-foreground' : ''}" ${p.status === 'MISSING' ? `title="누락 — ${esc(itemName(p.missingItem))}"` : ''}>${v == null ? '<span class="text-muted-foreground">-</span>' : fmtv(v)}</td>`;
+  const need = formulaItemKeys(k);
+  const itemRow = key => {
+    const it = P.items.find(i => i.key === key);
+    return `<tr class="border-b"><td class="td sticky start-0 bg-card ps-5 text-muted-foreground"><span class="flex items-center gap-1.5"><i data-lucide="${COLLECTION[it.collectionMethod].icon}" class="size-3"></i>${esc(it.name)}</span></td>${shown.map(p => {
+      const v = aggregate(it, P.values, monthsOf(state.cycle, p.period));
+      return cell(p, v?.value, x => it.unit === 'AMOUNT' ? F.short(x / fx(+p.period.slice(0, 4))) : Math.round(x).toLocaleString('en-US'));
+    }).join('')}</tr>`;
+  };
+  const head = `<tr class="border-b"><th class="th sticky start-0 bg-card">항목</th>${shown.map(p => `<th class="th num"><button type="button" data-period="${p.period}" class="${state.period === p.period ? 'text-foreground' : ''}">${state.cycle === 'MONTH' ? `${p.period.slice(2, 4)}.${p.period.slice(4)}` : periodName(p.period)}</button>${p.status === 'PROVISIONAL' ? '<div class="text-[10px] font-normal">잠정</div>' : ''}</th>`).join('')}</tr>`;
+  const rows = `${need.map(itemRow).join('')}
+    <tr class="border-b font-semibold bg-muted/30"><td class="td sticky start-0 bg-card">${esc(k.name)}</td>${shown.map(p => cell(p, p.value, v => fmtKpi(k, v, p.fx ?? fxv))).join('')}</tr>
+    <tr class="border-b"><td class="td sticky start-0 bg-card ps-5 text-muted-foreground">계획 경로</td>${shown.map(p => cell(p, p.plan, v => fmtKpi(k, v, p.fx ?? fxv))).join('')}</tr>
+    ${(k.subMetrics || []).map((s, si) => `<tr class="border-b"><td class="td sticky start-0 bg-card ps-5 text-muted-foreground">${esc(s.name)}</td>${shown.map(p => cell(p, p.subMetrics[si], v => fmtUnitValue(s.unit, s.decimals, v, p.fx ?? fxv))).join('')}</tr>`).join('')}
+    ${k.ebitda.method !== 'NONE' ? `<tr class="border-b font-semibold"><td class="td sticky start-0 bg-card">EBITDA 효과</td>${shown.map(p => cell(p, p.ebitdaEffect, v => `<span class="${neg(v)}">${signed(v)}</span>`)).join('')}</tr>` : ''}
+    ${k.ebitda.cashExpression ? `<tr><td class="td sticky start-0 bg-card">현금흐름 효과</td>${shown.map(p => cell(p, p.cashEffect, signed)).join('')}</tr>` : ''}`;
+  const lastV = [...periods].reverse().find(p => p.vars);
+  const e = k.ebitda;
+  let conv = '';
+  if (e.method === 'NONE') conv = 'EBITDA로 환산하지 않는 품질 KPI입니다. 지불 방식(행위별 / DRG·DIP·묶음)에 따라 효과의 부호가 바뀌기 때문입니다 (D30).';
+  else if (e.method === 'DELTA_X_BASE' && lastV) {
+    const uv = evalExpr(e.unitValue || '1', lastV.vars), sc = evalExpr(e.scale || '1', lastV.vars);
+    conv = `변화량 × ${describeFormula({ formula: { kind: 'EXPRESSION', expression: e.scale } }, P.items)}(${Math.round(sc).toLocaleString('en-US')}) × ${e.unitValue === '1' ? '' : `${describeFormula({ formula: { kind: 'EXPRESSION', expression: e.unitValue } }, P.items)}(${F.money(uv / lastV.fx)}) × `}계수 ${e.factor}% — ${esc(e.factorBasis || '')} · ${periodName(lastV.period)} 기준`;
+  } else if (e.method === 'AMOUNT_DELTA') conv = '금액 KPI라 기준 대비 변화 금액이 곧 EBITDA 효과입니다.';
+  else if (e.method === 'CUSTOM') conv = `직접 계산식: <code class="rounded bg-muted px-1">${esc(e.expression)}</code> — ${esc(e.factorBasis || '')}${e.cashExpression ? ` · 현금흐름 효과: <code class="rounded bg-muted px-1">${esc(e.cashExpression)}</code>` : ''}`;
+  const sub = (k.subMetrics || []).map((s, si) => { const last = [...shown].reverse().find(p => p.subMetrics[si] != null); return `<div class="rounded-lg bg-muted/60 px-3 py-2"><div class="text-xs text-muted-foreground">${esc(s.name)}</div><div class="font-semibold tabular-nums">${last ? fmtUnitValue(s.unit, s.decimals, last.subMetrics[si], last.fx ?? fxv) : '-'}</div></div>`; }).join('');
+  return card(`KPI 상세 — ${esc(k.name)} ${statusBadge(r.status)}`, `${esc(describeFormula(k, P.items))} · 측정 주기 ${CYCLE_LABEL[k.cycle]}${k.lag ? ` · 측정 지연 ${k.lag}개월${term('측정 지연')}` : ''}`, `
+    ${legend([{ name: '실적', color: kpiColor(P.kpis.indexOf(k)), line: true }, { name: '계획 경로', color: 'var(--muted-foreground)', line: true }, { name: '허용 오차', color: 'var(--chart-1)', opacity: 0.2 }])}
+    ${chart}
+    ${changes.length ? `<p class="flex items-center gap-1.5 text-xs text-muted-foreground"><i data-lucide="git-commit-horizontal" class="size-3.5"></i>정의 변경: ${changes.map(esc).join(' · ')} — 그래프 값은 모두 현재 정의로 계산했습니다.</p>` : ''}
+    ${sub ? `<div class="grid gap-2 sm:grid-cols-3">${sub}</div>` : ''}
+    <div class="overflow-x-auto rounded-lg border"><table class="w-full text-sm"><thead>${head}</thead><tbody>${rows}</tbody></table></div>
+    <p class="flex items-start gap-1.5 text-xs text-muted-foreground"><i data-lucide="calculator" class="mt-0.5 size-3.5 shrink-0"></i><span>${conv}</span></p>`,
+    `<a href="kpi-setting.html#kpis" class="btn btn-ghost btn-sm text-primary"><i data-lucide="settings-2"></i>성과 설정에서 편집</a>`);
+}
+
+/* ---------- EBITDA 효과 표 ---------- */
+function impactTable(view) {
+  const res = view.results.filter(r => r.kpi.ebitda.method !== 'NONE'), periods = view.keys.map((k, i) => ({ k, i })).filter(({ i }) => view.results.some(r => !r.periods[i].future));
+  const cell = (v, prov) => `<td class="td num ${neg(v)} ${prov ? 'italic text-muted-foreground' : ''}">${v == null ? '-' : signed(v)}</td>`;
+  const sumOf = (list, i) => { const vs = list.map(r => r.periods[i].ebitdaEffect).filter(v => v != null); return vs.length ? vs.reduce((a, b) => a + b, 0) : null; };
+  const total = list => list.reduce((a, r) => a + r.periods.reduce((x, p) => x + (p.ebitdaEffect || 0), 0), 0);
+  const rows = Object.entries(KPI_CATEGORY).map(([cat, label]) => {
+    const list = res.filter(r => r.kpi.category === cat);
+    if (!list.length) return '';
+    return `<tr class="bg-muted/50"><td class="td text-xs font-semibold text-muted-foreground" colspan="${periods.length + 2}">${label}</td></tr>
+      ${list.map(r => `<tr class="border-b"><td class="td sticky start-0 bg-card ps-5">${esc(r.kpi.name)}</td>${periods.map(({ i }) => cell(r.periods[i].ebitdaEffect, r.periods[i].status === 'PROVISIONAL')).join('')}${cell(total([r]))}</tr>`).join('')}
+      ${list.length > 1 ? `<tr class="border-b font-semibold"><td class="td sticky start-0 bg-card">${label} 소계</td>${periods.map(({ i }) => cell(sumOf(list, i))).join('')}${cell(total(list))}</tr>` : ''}`;
+  }).join('');
+  const ar = view.results.find(r => r.kpi.ebitda.cashExpression);
+  return `<details class="card group"><summary class="flex cursor-pointer list-none items-center justify-between p-6 font-semibold">EBITDA 효과 표<span class="flex items-center gap-2 text-sm font-normal text-muted-foreground">KPI × 기간 · 분류별 소계 · 단위 ${CUR.unit}<i data-lucide="chevron-down" class="size-4 transition-transform group-open:rotate-180"></i></span></summary>
+    <div class="card-content"><div class="overflow-x-auto"><table class="w-full min-w-[720px] text-sm"><thead><tr class="border-b"><th class="th sticky start-0 bg-card">KPI</th>${periods.map(({ k }) => `<th class="th num">${state.cycle === 'MONTH' ? `${k.slice(2, 4)}.${k.slice(4)}` : periodName(k)}</th>`).join('')}<th class="th num">합계</th></tr></thead>
+      <tbody>${rows}<tr class="border-b bg-muted/30 font-bold"><td class="td sticky start-0 bg-card">EBITDA 효과 합계</td>${periods.map(({ i }) => cell(sumOf(res, i))).join('')}${cell(total(res))}</tr>
+      ${ar ? `<tr><td class="td sticky start-0 bg-card text-muted-foreground">현금흐름 효과 (EBITDA 아님)</td>${periods.map(({ i }) => cell(ar.periods[i].cashEffect)).join('')}<td class="td"></td></tr>` : ''}</tbody></table></div>
+      <p class="mt-2 text-xs text-muted-foreground">기울임은 잠정 값입니다. 현금흐름 효과는 그 기간 말 기준 누적 수준이라 합계를 내지 않습니다.</p></div></details>`;
+}
+
+/* ---------- 그리기 ---------- */
+function render() {
+  const { full, view } = compute();
+  if (!state.kpi || !full.results.some(r => r.kpiKey === state.kpi)) state.kpi = full.results[0]?.kpiKey ?? null;
+  if (!full.results.length) { page.innerHTML = filterBar() + `<section class="card p-6 text-sm">사용 중인 KPI가 없습니다. <a href="kpi-setting.html#kpis" class="text-primary">성과 설정</a>에서 KPI를 켜 주세요.</section>`; lucide.createIcons(); return; }
+  page.innerHTML = filterBar() + journeyCard(full, view) + kpiGrid(full) + `<div id="detail">${detailCard(view)}</div>` + impactTable(view);
+  lucide.createIcons();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-cycle],[data-kpi],[data-cat],[data-status-filter],[data-period]');
+  if (!t) return;
+  if (t.dataset.cycle) { state.cycle = t.dataset.cycle; state.period = null; }
+  else if (t.dataset.kpi) { state.kpi = t.dataset.kpi; history.replaceState(null, '', `?kpi=${state.kpi}`); render(); document.getElementById('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  else if (t.dataset.cat !== undefined) state.category = t.dataset.cat;
+  else if (t.dataset.statusFilter !== undefined) state.status = state.status === t.dataset.statusFilter ? '' : t.dataset.statusFilter;
+  else if (t.dataset.period) state.period = state.period === t.dataset.period ? null : t.dataset.period;
+  render();
+});
+document.addEventListener('change', e => { if (e.target.id === 'rangeSelect') { state.range = e.target.value; render(); } });
+/* 성과 설정 창에서 값을 저장하면 다시 계산한다 */
+window.addEventListener('storage', e => { if (e.key === STORE_KEY) { P = loadPerf(HID); render(); toast('성과 설정의 변경을 반영했습니다.'); } });
+
+render();
+</script>
+</body>
+</html>

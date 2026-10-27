@@ -1,6 +1,6 @@
-/* EBITDA 시뮬레이터 시안 공용 스크립트 — 스타일, 병원 데이터, 형식, 차트, 셸, 모달
- * 두 시안(simulator.html, hospital.html)이 같은 병원 데이터를 읽어야 병원 기초정보에서 추가한 프리셋·매출 항목이
- * 시뮬레이터에 그대로 나타난다. <head>에서 Tailwind 스크립트보다 먼저 불러온다. */
+/* 병원 EBITDA 시안 공용 스크립트 — 스타일, 병원 데이터, 형식, 차트, 셸, 모달
+ * 모든 시안이 같은 병원 데이터를 읽어야 병원 기초정보에서 바꾼 값이 시뮬레이터·병원정보에 그대로 나타난다.
+ * <head>에서 Tailwind 스크립트보다 먼저 불러온다. */
 
 /* ---------- 스타일: 호스트 app/globals.css 토큰 + core 컴포넌트 클래스 ---------- */
 (() => {
@@ -201,7 +201,7 @@ const HOSPITAL_SEED = [
       { key: 'reg', name: '규제강화', band: null, desc: '처방 커머스 불가, 확산 둔화', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5, p1: false, p2: true }, updatedBy: '김분석', updatedAt: '2026.10.11' },
       { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5, p1: false, p2: false }, updatedBy: '김분석', updatedAt: '2026.10.14' },
     ],
-    profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
+    profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, fxRates: [{ year: 2025, rate: 7.1 }], fxBasis: '2025 평균 환율', version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
     params: [
       { key: 'OUT', risk: null, growth: 3 },
@@ -267,6 +267,14 @@ function valuation(years, wacc, growth) {
 }
 
 const annualized = v => Math.round(v.count * 12 / v.months);
+/* 연도별 고정 환율 — 보고 통화 1 = rate 병원 통화. 없는 연도는 앞 연도 값을 이어 쓴다 (D10-a) */
+function fxRate(h, year) {
+  if (h.currency === h.report) return 1;
+  const list = [...(h.profile.fxRates || [])].sort((a, b) => a.year - b.year);
+  let rate = list[0]?.rate ?? 1;
+  list.forEach(r => { if (r.year <= year) rate = r.rate; });
+  return rate;
+}
 const periodText = v => `${v.from} ~ ${v.to}`;
 
 /* ---------- 형식 ---------- */
@@ -351,6 +359,74 @@ function chart({ bars = [], lines = [], mode = 'stack', selected = null, height 
   return `<svg viewBox="0 0 ${W} ${H}" class="h-auto w-full select-none" role="img">${grid}${body}${hit}</svg>`;
 }
 
+/* 기간 추이 그래프 — labels 길이만큼 칸을 만든다.
+ * bars: 쌓는 막대 { name, values, color, dim: bool[] }, lines: { name, values(null이면 끊김), color, dash, dim: bool[] (그 점 양옆 선을 점선), labels },
+ * hlines: { value, color, label, dash }, band: { lo: [], hi: [] } 허용 오차 띠, keys: 칸을 누르면 data-period로 넘기는 값 */
+function timeChart({ labels, sublabels = [], bars = [], lines = [], hlines = [], band = null, keys = [], selected = null, height = 240, fmt = F.short }) {
+  const n = labels.length, W = 760, H = height, P = { l: 64, r: 16, t: 16, b: sublabels.length ? 40 : 28 };
+  const vals = bars.length ? [0] : [];
+  for (let i = 0; i < n; i++) {
+    let p = 0, q = 0;
+    bars.forEach(b => { const v = b.values[i] || 0; if (v >= 0) p += v; else q += v; });
+    if (bars.length) vals.push(p, q);
+    lines.forEach(l => l.values[i] != null && vals.push(l.values[i]));
+    if (band) { if (band.lo[i] != null) vals.push(band.lo[i]); if (band.hi[i] != null) vals.push(band.hi[i]); }
+  }
+  hlines.forEach(h => h.value != null && vals.push(h.value));
+  if (!vals.length) vals.push(0, 1);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  // 선만 그릴 때는 값 범위에 맞춰 축을 잡는다 — 0부터 그리면 작은 변화가 평평하게 보인다
+  if (!bars.length) { const pad = (hi - lo) * 0.15 || Math.abs(hi) * 0.1 || 1; const floor = lo >= 0 ? 0 : -Infinity; lo = Math.max(lo - pad, floor); hi += pad; }
+  const [min, max, step] = niceScale(lo, hi);
+  const ih = H - P.t - P.b, y = v => P.t + (max - v) / (max - min) * ih;
+  const bw = (W - P.l - P.r) / Math.max(n, 1), cx = i => P.l + bw * i + bw / 2;
+  let out = '';
+  for (let v = min; v <= max + step / 2; v += step) {
+    out += `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" ${Math.abs(v) < step / 2 && bars.length ? 'stroke="var(--muted-foreground)" stroke-opacity=".5"' : 'stroke="var(--border)" stroke-dasharray="3 3"'}/>
+      <text x="${P.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted-foreground)">${fmt(Math.abs(v) < step / 2 ? 0 : v)}</text>`;
+  }
+  const every = Math.ceil(n / 12);
+  for (let i = 0; i < n; i++) {
+    if (selected != null && keys[i] === selected) out += `<rect x="${P.l + bw * i + 1}" y="${P.t}" width="${bw - 2}" height="${ih}" rx="6" fill="var(--accent)" opacity=".7"/>`;
+    // 마지막 칸은 바로 앞 라벨과 겹치지 않을 때만 따로 적는다
+    if (i % every === 0 || (i === n - 1 && (n - 1) % every > every / 2)) {
+      out += `<text x="${cx(i)}" y="${H - (sublabels.length ? 22 : 8)}" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">${labels[i]}</text>`;
+      if (sublabels[i]) out += `<text x="${cx(i)}" y="${H - 7}" text-anchor="middle" font-size="10" fill="var(--muted-foreground)">${sublabels[i]}</text>`;
+    }
+  }
+  if (band) {
+    const pts = (arr, rev) => { const idx = arr.map((v, i) => v == null ? null : i).filter(i => i != null); return (rev ? idx.reverse() : idx).map(i => `${cx(i)},${y(arr[i])}`); };
+    const poly = [...pts(band.hi), ...pts(band.lo, true)];
+    if (poly.length > 2) out += `<polygon points="${poly.join(' ')}" fill="var(--chart-1)" opacity=".08"/>`;
+  }
+  const w = Math.min(bw * 0.6, 34);
+  for (let i = 0; i < n; i++) {
+    let p = 0, q = 0;
+    bars.forEach((b, k) => {
+      const v = b.values[i] || 0; if (!v) return;
+      const from = v >= 0 ? p : q, to = from + v;
+      if (v >= 0) p = to; else q = to;
+      out += `<rect x="${cx(i) - w / 2}" y="${y(Math.max(from, to))}" width="${w}" height="${Math.max(Math.abs(y(from) - y(to)), 1)}" fill="${b.color || tone(k)}" fill-opacity="${b.dim?.[i] ? 0.35 : (b.opacity ?? 1)}"/>`;
+    });
+  }
+  hlines.forEach(h => { if (h.value == null) return; out += `<line x1="${P.l}" x2="${W - P.r}" y1="${y(h.value)}" y2="${y(h.value)}" stroke="${h.color}" stroke-width="1.5" ${h.dash ? 'stroke-dasharray="6 4"' : ''}/>${h.label ? `<text x="${W - P.r - 4}" y="${y(h.value) - 4}" text-anchor="end" font-size="10" fill="${h.color}">${h.label}</text>` : ''}`; });
+  lines.forEach((l, k) => {
+    const color = l.color || tone(k);
+    for (let i = 0; i < n - 1; i++) {
+      const a = l.values[i], b = l.values[i + 1];
+      if (a == null || b == null) continue;
+      const dash = l.dash || l.dim?.[i] || l.dim?.[i + 1];
+      out += `<line x1="${cx(i)}" y1="${y(a)}" x2="${cx(i + 1)}" y2="${y(b)}" stroke="${color}" stroke-width="${l.width ?? 2.5}" ${dash ? 'stroke-dasharray="5 4"' : ''} stroke-linecap="round"/>`;
+    }
+    if (!l.noDots) l.values.forEach((v, i) => { if (v != null) out += `<circle cx="${cx(i)}" cy="${y(v)}" r="3" fill="${l.dim?.[i] ? 'var(--card)' : color}" stroke="${color}" stroke-width="1.5"/>`; });
+  });
+  const hit = labels.map((lab, i) => {
+    const tip = [...bars, ...lines].filter(s => s.values[i] != null).map(s => `${s.name} ${fmt(s.values[i])}`).join('\n');
+    return `<rect ${keys[i] != null ? `data-period="${keys[i]}"` : ''} class="cursor-pointer" x="${P.l + bw * i}" y="0" width="${bw}" height="${H}" fill="transparent"><title>${lab}${sublabels[i] ? ' ' + sublabels[i] : ''}\n${tip}</title></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="h-auto w-full select-none" role="img">${out}${hit}</svg>`;
+}
+
 function legend(items) {
   return `<div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">${items.map(it => `<span class="flex items-center gap-1.5">${it.line
     ? `<span class="h-0.5 w-3.5 rounded" style="background:${it.color}"></span>`
@@ -405,7 +481,9 @@ function yearTable({ rows, selected, baseYear = 2025, change = true }) {
 function mountShell({ active, title, footer, guide }) {
   const nav = [
     { key: 'simulator', label: '시뮬레이터', icon: 'calculator', href: 'simulator.html' },
+    { key: 'performance', label: '병원정보', icon: 'activity', href: 'performance.html' },
     { key: 'hospital', label: '병원 기초정보', icon: 'hospital', href: 'hospital.html' },
+    { key: 'kpi-setting', label: '성과 설정', icon: 'settings-2', href: 'kpi-setting.html' },
   ];
   const navCls = 'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium';
   document.body.innerHTML = `
@@ -417,7 +495,7 @@ function mountShell({ active, title, footer, guide }) {
       </div>
       <nav aria-label="주 메뉴" class="flex-1 space-y-3 overflow-y-auto px-3 py-4">
         <div>
-          <div class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-sidebar-foreground/70"><span class="flex-1">EBITDA 시뮬레이터</span><i data-lucide="chevron-down" class="size-3"></i></div>
+          <div class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-sidebar-foreground/70"><span class="flex-1">병원 EBITDA</span><i data-lucide="chevron-down" class="size-3"></i></div>
           <div class="mt-1 space-y-0.5">${nav.map(n => n.key === active
             ? `<a href="${n.href}" aria-current="page" class="${navCls} bg-sidebar-accent text-sidebar-primary"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-primary"></i><span class="flex-1">${n.label}</span></a>`
             : `<a href="${n.href}" class="${navCls} text-sidebar-foreground/70 transition-all hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-foreground/50"></i><span class="flex-1">${n.label}</span></a>`).join('')}
@@ -446,7 +524,7 @@ function mountShell({ active, title, footer, guide }) {
       <main id="main-content" class="min-w-0 flex-1 p-4 sm:p-6">
         <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-bold tracking-tight">${title}</h1>${guide ? `<button type="button" data-guide="${guide}" class="btn btn-outline btn-sm" title="사용 가이드 (?)"><i data-lucide="book-open"></i>사용 가이드</button>` : ''}</div>
-          <nav aria-label="breadcrumb" class="flex items-center gap-1.5 text-sm text-muted-foreground"><span>EBITDA 시뮬레이터</span><i data-lucide="chevron-right" class="size-3.5"></i><span class="text-foreground">${title}</span></nav>
+          <nav aria-label="breadcrumb" class="flex items-center gap-1.5 text-sm text-muted-foreground"><span>병원 EBITDA</span><i data-lucide="chevron-right" class="size-3.5"></i><span class="text-foreground">${title}</span></nav>
         </div>
         <div id="page" class="space-y-6"></div>
       </main>
@@ -604,6 +682,18 @@ const GLOSSARY = {
   CAPEX: '설비·시스템 등 자산에 쓰는 투자 금액입니다.',
   감가상각: '자산 투자 금액을 사용 기간에 나눠 비용으로 잡는 금액입니다.',
   운전자본: '매출채권·재고처럼 영업에 묶이는 돈입니다. 늘어나면 FCF가 줄어듭니다.',
+  'EBITDA 효과': 'KPI가 기준값에서 움직인 만큼을 EBITDA 금액으로 바꾼 값입니다. 병원 전체 EBITDA가 아니라 기준 기간 대비 개선분입니다.',
+  '현금흐름 효과': '미수채권 회수가 빨라져 풀린 현금입니다. EBITDA가 아니므로 EBITDA 효과에 더하지 않습니다.',
+  연환산: '집계 기간이 12개월보다 짧을 때 실적 인원 × 12 ÷ 개월 수로 1년 치를 추정한 값입니다. 병원정보에서는 최근 3개 확정 기간 효과의 평균 × 1년 기간 수입니다.',
+  '기준 기간': 'KPI 개선을 재기 시작하는 기간입니다. 이 기간의 KPI 값 하나가 기준값입니다(분자·분모를 기간 전체로 합산).',
+  '계획 경로': '기준값에서 목표값까지 기간마다 같은 폭으로 움직이는 선입니다. 중간 목표가 있으면 구간마다 직선입니다.',
+  진척률: '(현재값 − 기준값) ÷ (목표값 − 기준값). 100%면 목표에 닿은 것입니다.',
+  '허용 오차': '계획 경로보다 이만큼까지 뒤처져도 "경로상"으로 봅니다. 기본은 기준값 → 목표값 거리의 10%입니다.',
+  '측정 지연': '값이 확정되기까지 걸리는 기간 수입니다. 이 기간 안의 값은 "잠정"이고 상태 판정에 쓰지 않습니다.',
+  잠정: '측정 지연 기간 안의 값이거나 예상으로 입력한 값입니다. 그래프에서 흐리게·점선으로 보입니다.',
+  공헌이익률: '매출 1원이 늘 때 EBITDA가 느는 비율(매출 − 변동비)입니다. KPI 변화를 EBITDA로 바꿀 때 씁니다.',
+  '연동 값 차이': '연동으로 바꾸기 전 기간에 병원 시스템 값이 들어왔는데 입력한 값과 다른 경우입니다. 관리자가 연동 값으로 바꿀지 정합니다.',
+  보정: '연동 값이 틀렸을 때 관리자가 사유와 함께 넣은 값입니다. 보정 값이 연동 값보다 우선합니다.',
 };
 
 /* 도움말 아이콘 — 마우스를 올리거나 포커스하면 툴팁이 뜬다. <summary> 안에서도 쓸 수 있게 button 대신 span을 쓴다 */
