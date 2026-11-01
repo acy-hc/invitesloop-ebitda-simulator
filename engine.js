@@ -16,11 +16,11 @@ const FORMULA_META = [
   ['subMed', 'Medical 구독 매출', 'medActive * feeMed', '활성 Medical 구독자에 연 구독료를 곱한다.', 'medActive: 활성 Medical 구독자; feeMed: 연 구독료', '구독 매출·매출 합계'],
   ['subWell', 'Wellness 구독 매출', 'wellNew * feeWell', 'Wellness는 그해 신규만 반영한다.', 'wellNew: 신규 Wellness 구독자; feeWell: 연 구독료', '구독 매출·매출 합계'],
   ['corpReach', '기업병원 도달 인원', 'corpPool * penetration * multiplier', '기업병원을 켰을 때 연차별 침투율을 적용한다. 기본 침투율은 Y1~Y2가 0이다.', 'corpPool: 전체 대상 인원; penetration: 연차별 침투율; multiplier: 침투 배율', '기업병원 매출·커머스 직구매'],
-  ['corpRev', '기업병원 매출', 'corpReach * 0.95 * 0.10 * 180 + atRisk * 0.20 * visits * visitCost * svcFee', '도달 인원의 검진 매출과 위험군 연계 매출의 합.', 'corpReach: 도달 인원; atRisk: 위험군 수(도달 × 0.46); visits: 방문횟수; visitCost: 방문당 진료비; svcFee: 수수료율', '기업병원 매출·EBITDA'],
-  ['commMed', '커머스 의료경로 구매자', 'subscribers * 0.40', '커머스는 Y2부터 시작한다. 활성 구독자 기반.', 'subscribers: Medical 활성 + Wellness 신규', 'P1·P2 구매자'],
+  ['corpRev', '기업병원 매출', 'corpReach * attendRate * screenConv * screenPrice + atRisk * referRate * visits * visitCost * svcFee', '도달 인원의 검진 매출과 위험군 연계 매출의 합. 비율·단가는 기업병원 항목의 모델 값이다.', 'corpReach: 도달 인원; attendRate: 검진 수검률; screenConv: 검진 매출 전환율; screenPrice: 검진 단가; atRisk: 위험군 수(도달 × 임직원 위험군 비율); referRate: 위험군 외래 연계율; visits: 방문횟수; visitCost: 방문당 진료비; svcFee: 수수료율', '기업병원 매출·EBITDA'],
+  ['commMed', '커머스 의료경로 구매자', 'subscribers * buyRate', '커머스는 Y2부터 시작한다. 활성 구독자 기반.', 'subscribers: Medical 활성 + Wellness 신규; buyRate: 구독자 구매 전환율(커머스 모델 값)', 'P1·P2 구매자'],
   ['commCorp', '커머스 기업 직구매자', 'corpReach * commCorpPen', '기업병원 도달 인원의 직구매 전환. Y2부터 시작한다.', 'corpReach: 기업병원 도달 인원; commCorpPen: 직구매 침투율(소수)', 'P1·P2 구매자'],
-  ['p1', 'P1 Invites Pharma 매출', 'commBuyers * 120 * 0.15 * 0.75 + commBuyers * coachFee * 12', 'P1을 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; coachFee: 월 코칭료', '커머스 매출·EBITDA'],
-  ['p2', 'P2 K-Commerce 매출', 'commBuyers * 200 * 0.20 + commBuyers * coachFee * 12', 'P2를 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; coachFee: 월 코칭료', '커머스 매출·EBITDA'],
+  ['p1', 'P1 Invites Pharma 매출', 'commBuyers * p1Price * p1Margin * p1Settle + commBuyers * coachFee * 12', 'P1을 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; p1Price·p1Margin·p1Settle: P1 객단가·마진·정산 비율(커머스 모델 값); coachFee: 월 코칭료', '커머스 매출·EBITDA'],
+  ['p2', 'P2 K-Commerce 매출', 'commBuyers * p2Price * p2Margin + commBuyers * coachFee * 12', 'P2를 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; p2Price·p2Margin: P2 객단가·마진(커머스 모델 값); coachFee: 월 코칭료', '커머스 매출·EBITDA'],
   ['itemSubscription', '구독형 매출 항목', 'base * conv * fee', '추가한 구독형 매출 항목. 기반 인원 중 전환한 사람에 구독료를 곱한다.', 'base: 기반 인원; conv: 전환율(소수); fee: 구독료', '추가한 매출 항목'],
   ['itemReferral', '연계 수수료형 매출 항목', 'base * rate * visits * cost * fee', '추가한 연계 수수료형 매출 항목.', 'base: 기반 인원; rate: 연계율(소수); visits: 방문횟수; cost: 진료비; fee: 수수료율(소수)', '추가한 매출 항목'],
   ['itemPerCase', '건당형 매출 항목', 'base * ratio * price', '추가한 건당형 매출 항목.', 'base: 기반 인원; ratio: 대상 비율(소수); price: 건당 단가', '추가한 매출 항목'],
@@ -112,12 +112,12 @@ function fieldOf(h, key) {
   for (const it of h.revenueItems) { const f = it.fields.find(x => x.key === key); if (f) return f; }
   return null;
 }
-/* 시나리오 입력값. 실적값 사용(key@actual)을 켰으면 병원 실적값을 쓴다 */
+/* 시나리오 입력값. 실적값 사용(key@actual)을 켰으면 병원 실적값을 쓴다. 병원 기본값이 없으면 항목의 기본값 */
 function driverValue(h, d, key) {
   if (d[key + '@actual']) { const f = fieldOf(h, key); if (f?.actual != null) return f.actual; }
-  return d[key] ?? h.defaults[key];
+  return d[key] ?? h.defaults[key] ?? fieldOf(h, key)?.def;
 }
-/* Y5 목표 — 입력하지 않으면 항목의 기본 목표. 마케팅비율은 Y1의 절반 */
+/* Y5 목표 — 입력하지 않으면 항목의 기본 목표. 마케팅비율은 모든 병원 공통으로 Y1의 절반 (D35) */
 function rampTarget(h, d, key, start) {
   if (d[key + '@5'] != null && d[key + '@5'] !== '') return +d[key + '@5'];
   if (key === 'mktgRate') return start * 0.5;
@@ -142,12 +142,16 @@ const effectiveChurn = (h, d, ctx = formulaContext()) => ctx.eval('churn', { chu
 /* h: 병원(기초정보), d: 시나리오 입력, formulas: 수정한 수식 { key: expr } */
 function runModel(h, d, formulas = {}) {
   const ctx = formulaContext(formulas);
-  const p = h.profile, m = h.model;
+  const p = h.profile;
   const prm = Object.fromEntries(h.params.map(x => [x.key, x]));
   const val = k => driverValue(h, d, k);
   const enabled = Object.fromEntries(h.revenueItems.map(it => [it.key, it.enabled]));
   const item = k => h.revenueItems.find(it => it.key === k);
   const ramp = (key, y, label, start = val(key)) => ctx.eval('ramp', { start, target: rampTarget(h, d, key, start), year: y }, `${label} ${fieldOf(h, key)?.label ?? key}`);
+  /* 템플릿 항목 입력 — 병원에 그 항목이 없으면 0이다. 항목 구성은 병원마다 다르다 (D16-c) */
+  const has = key => !!fieldOf(h, key);
+  const rampIf = (key, y, label, start) => (has(key) ? ramp(key, y, label, start) : 0);
+  const valIf = key => (has(key) ? val(key) : 0);
   const growth = (type, y, label) => ctx.eval('growth', { growthRate: (prm[type]?.growth ?? 0) / 100, year: y }, `${label} ${VOLUME_TYPES.find(t => t.key === type).label}`);
   const riskRatio = (prm.CHK?.risk ?? 0) / 100;
 
@@ -157,16 +161,16 @@ function runModel(h, d, formulas = {}) {
     const f = (key, vars) => ctx.eval(key, vars, label);
     const screen = volumeTotal(h, d, 'CHK') * siteShare(h, 'CHK', site) * growth('CHK', y, label);
     const out = volumeTotal(h, d, 'OUT') * siteShare(h, 'OUT', site) * growth('OUT', y, label);
-    const app = ramp('appRate', y, label) / 100, cmed = ramp('convMed', y, label) / 100, cwell = ramp('convWell', y, label) / 100;
+    const app = rampIf('appRate', y, label) / 100, cmed = rampIf('convMed', y, label) / 100, cwell = rampIf('convWell', y, label) / 100;
     const nonHealthy = screen * riskRatio, healthy = screen * (1 - riskRatio);
     const screenMed = f('screenMed', { nonHealthy, app, cmed }), screenWell = f('screenWell', { healthy, app, cwell });
     const chronicN = out * site.chronic / 100;
     const outMed = f('outMed', { chronicN, app, cmed }), outWell = f('outWell', { out, chronicN, app, cwell });
-    const refRate = ramp('refRate', y, label, val('refRate') * site.referral) / 100;
-    const visitCost = ramp('visitCost', y, label), visits = val('visits'), svcFee = val('svcFee') / 100;
+    const refRate = rampIf('refRate', y, label, valIf('refRate') * site.referral) / 100;
+    const visitCost = rampIf('visitCost', y, label), visits = valIf('visits'), svcFee = valIf('svcFee') / 100;
     const refRev = f('refRev', { refPatients: nonHealthy * refRate, visits, visitCost, svcFee });
     const subscribers = screenMed + screenWell + outMed + outWell;
-    const famRev = f('famRev', { subscribers, famSize: val('famSize'), riskRatio, refRate, visits, visitCost, svcFee });
+    const famRev = f('famRev', { subscribers, famSize: valIf('famSize'), riskRatio, refRate, visits, visitCost, svcFee });
     return { refRev, famRev, medNew: screenMed + outMed, wellNew: screenWell + outWell };
   }
   const siteRuns = Array.from({ length: HORIZON }, (_, y) => h.sites.map(s => siteRev(s, y)));
@@ -181,6 +185,8 @@ function runModel(h, d, formulas = {}) {
   }
 
   const corpOn = enabled.corpRev && val('corp');
+  /* 템플릿 항목의 모델 값 — 비율은 % 단위로 저장한다 (D16-d) */
+  const cm = item('corpRev')?.model || {}, km = item('commRev')?.model || {};
   const lossYears = p.taxLossYears || 0, losses = [];
   let prevRev = 0;
   return {
@@ -189,23 +195,23 @@ function runModel(h, d, formulas = {}) {
       const label = `합산 Y${y + 1}`;
       const f = (key, vars, suffix = '') => ctx.eval(key, vars, label + suffix);
       const sites = siteRuns[y];
-      const feeMed = ramp('feeMed', y, label), feeWell = ramp('feeWell', y, label);
+      const feeMed = rampIf('feeMed', y, label), feeWell = rampIf('feeWell', y, label);
       const medNew = sites.reduce((a, s) => a + s.medNew, 0), wellNew = sites.reduce((a, s) => a + s.wellNew, 0);
       const medActive = val('reservoir') ? stocks[y] : medNew;
       const subscribers = medActive + wellNew;
-      const visits = val('visits'), svcFee = val('svcFee') / 100;
+      const visits = valIf('visits'), svcFee = valIf('svcFee') / 100;
 
       let corpReach = 0, corpRev = 0;
       if (corpOn) {
-        corpReach = f('corpReach', { corpPool: m.corpPool, penetration: m.corpPenBase[y], multiplier: val('corpPen') });
-        corpRev = f('corpRev', { corpReach, atRisk: corpReach * 0.46, visits, visitCost: ramp('visitCost', y, label + ' 기업병원'), svcFee });
+        corpReach = f('corpReach', { corpPool: cm.corpPool, penetration: cm.corpPenBase[y], multiplier: val('corpPen') });
+        corpRev = f('corpRev', { corpReach, attendRate: cm.attendRate / 100, screenConv: cm.screenConv / 100, screenPrice: cm.screenPrice, atRisk: corpReach * cm.atRiskRate / 100, referRate: cm.referRate / 100, visits, visitCost: rampIf('visitCost', y, label + ' 기업병원'), svcFee });
       }
       /* 커머스는 Y2부터 — Y1은 진료 서비스 준비에 집중한다 */
       let commRev = 0, commBuyers = 0;
       if (enabled.commRev && y >= 1) {
-        commBuyers = f('commMed', { subscribers }) + f('commCorp', { corpReach, commCorpPen: m.commCorpPen / 100 });
-        if (val('p1')) commRev += f('p1', { commBuyers, coachFee: val('coachFee') });
-        if (val('p2')) commRev += f('p2', { commBuyers, coachFee: val('coachFee') });
+        commBuyers = f('commMed', { subscribers, buyRate: km.buyRate / 100 }) + f('commCorp', { corpReach, commCorpPen: km.commCorpPen / 100 });
+        if (val('p1')) commRev += f('p1', { commBuyers, p1Price: km.p1Price, p1Margin: km.p1Margin / 100, p1Settle: km.p1Settle / 100, coachFee: val('coachFee') });
+        if (val('p2')) commRev += f('p2', { commBuyers, p2Price: km.p2Price, p2Margin: km.p2Margin / 100, coachFee: val('coachFee') });
       }
 
       const rev = {
@@ -218,7 +224,7 @@ function runModel(h, d, formulas = {}) {
       /* 병원 기초정보에서 추가한 매출 항목 — 산출 방식에 따라 계산한다 */
       const base = {
         OUT: volumeTotal(h, d, 'OUT') * growth('OUT', y, label), IN: volumeTotal(h, d, 'IN') * growth('IN', y, label),
-        CHK: volumeTotal(h, d, 'CHK') * growth('CHK', y, label), SUBS: subscribers, CORP: corpReach,
+        CHK: volumeTotal(h, d, 'CHK') * growth('CHK', y, label), ER: volumeTotal(h, d, 'ER') * growth('ER', y, label), SUBS: subscribers, CORP: corpReach,
       };
       h.revenueItems.filter(it => it.custom && it.enabled).forEach(it => {
         const fv = s => +(d[`${it.key}.${s}`] ?? it.fields.find(x => x.key === `${it.key}.${s}`)?.def ?? 0);

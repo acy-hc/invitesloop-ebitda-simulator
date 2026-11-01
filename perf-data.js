@@ -1,5 +1,5 @@
-/* 병원정보·성과 설정 시안 데이터 — 데이터 항목, KPI, 기준·목표, 기간별 값(예시값)
- * docs/09-kpi-definition.md, docs/10-hospital-data-interface.md의 시드를 따른다. 값은 VISTA 예시값이다(실적 아님).
+/* 병원경영 Dashboard·성과 설정 시안 데이터 — 데이터 항목, KPI, 기준·목표, 기간별 값(예시값)
+ * docs/09-kpi-definition.md, docs/10-hospital-data-interface.md의 시드를 따른다. 값은 병원별 예시값이다(실적 아님).
  * shared.js의 readStore/writeStore로 병원별 perf 묶음을 저장한다. */
 
 /* 시안의 오늘 — 입력 기한·누락을 늘 같은 결과로 보여 주려고 고정한다 */
@@ -7,8 +7,13 @@ const MOCK_TODAY = '2026-10-07';
 const LATEST_MONTH = '202609';
 
 /* ---------- 데이터 항목 사전 ---------- */
+/* [key, 이름, 단위, 집계, 수집 주기, 수집 방식, 출처, 기준 날짜, 분모, 연동 시작] → 데이터 항목 */
+function dataItem([key, name, unit, aggregation, cycle, collectionMethod, sourceSystem, referenceDateNote, denominatorItemKey, interfaceFrom]) {
+  return { key, name, unit, aggregation, cycle, collectionMethod, sourceSystem, referenceDateNote, denominatorItemKey,
+    interfaceFrom: collectionMethod === 'INTERFACE' ? interfaceFrom : null,
+    deadline: cycle === 'WEEK' ? { weekday: 3 } : { dayOfMonth: 10 }, allowNegative: false, seed: true };
+}
 const DATA_ITEM_SEED = [
-  // key, 이름, 단위, 집계, 수집 주기, 수집 방식, 출처, 기준 날짜, 분모, 연동 시작
   ['STAFFED_BEDS', '가동 병상 수', '병상', 'AVG', 'MONTH', 'INTERFACE', 'HIS(병상관리)', '기간 중 매일 가동 병상 평균', null, '202601'],
   ['ADMISSIONS', '입원 건수', '건', 'SUM', 'MONTH', 'INTERFACE', 'HIS', '입원일', null, '202601'],
   ['DISCHARGES', '퇴원 건수', '건', 'SUM', 'MONTH', 'INTERFACE', 'HIS', '퇴원일', null, '202601'],
@@ -30,11 +35,7 @@ const DATA_ITEM_SEED = [
   ['OUTPATIENT_VISITS', '외래 방문 건수', '건', 'SUM', 'WEEK', 'INTERFACE', 'HIS(접수)', '접수일', null, '2026-W01'],
   ['OUTPATIENT_NEW', '외래 신환 수', '명', 'SUM', 'WEEK', 'INTERFACE', 'HIS', '접수일', 'OUTPATIENT_VISITS', '2026-W01'],
   ['OUTPATIENT_REVENUE', '외래 진료수익', 'AMOUNT', 'SUM', 'MONTH', 'MANUAL', '원무·회계', '진료일', null, null],
-].map(([key, name, unit, aggregation, cycle, collectionMethod, sourceSystem, referenceDateNote, denominatorItemKey, interfaceFrom]) => ({
-  key, name, unit, aggregation, cycle, collectionMethod, sourceSystem, referenceDateNote, denominatorItemKey,
-  interfaceFrom: collectionMethod === 'INTERFACE' ? interfaceFrom : null,
-  deadline: cycle === 'WEEK' ? { weekday: 3 } : { dayOfMonth: 10 }, allowNegative: false, seed: true,
-}));
+].map(dataItem);
 
 /* 템플릿 KPI가 쓰는 데이터 항목 — 템플릿을 추가할 때 함께 생긴다 (D26) */
 const TEMPLATE_ITEMS = {
@@ -83,109 +84,194 @@ const KPI_TEMPLATES = [
     ebitda: { method: 'AMOUNT_DELTA' }, templateNote: '건강검진 패키지·비급여 프로그램 같은 추가 수익. 매출·직접비 데이터 항목 한 쌍이 함께 생긴다' }),
 ];
 
-const TARGET_SEED = {
-  BED_TURNOVER: { baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue: 3.4, targetPeriod: '202612', milestones: [{ period: '202512', value: 3.1 }], toleranceRatio: 0.1 },
-  READMISSION_30D: { baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue: 10, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1 },
-  REMOTE_CARE: { baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue: 380000, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1 },
-  CLAIM_DENIAL: { baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue: 1.5, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1 },
-  AR_DAYS: { baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue: 55, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1 },
-  OUTPATIENT_VISITS: { baselineFrom: '202501', baselineTo: '202512', baselineValue: null, targetValue: 5900, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1 },
+/* 템플릿 KPI가 만드는 데이터 항목 — 분기 단위·수기 입력 (CMS 보고서) */
+const templateItem = ([key, name, unit, aggregation]) => ({ key, name, unit, aggregation, cycle: 'QUARTER', collectionMethod: 'MANUAL', sourceSystem: 'CMS 보고서 / 수기', referenceDateNote: '분기',
+  denominatorItemKey: null, interfaceFrom: null, deadline: { dayOfMonth: 10 }, allowNegative: unit === 'AMOUNT' && key.startsWith('CMS_ADJ'), seed: false });
+
+/* ---------- 병원별 성과 시드 ----------
+ * 데이터 항목·KPI 정의는 공통 시드에서 시작하고, 병원마다 더할 항목·KPI·목표와 예시값을 만드는 계수를 둔다.
+ * 계수(gen)는 시안 예시값을 만드는 데만 쓴다 — 금액은 보고 통화 (D10-a). */
+const target = (targetValue, o = {}) => ({ baselineFrom: '202501', baselineTo: '202503', baselineValue: null, targetValue, targetPeriod: '202612', milestones: [], toleranceRatio: 0.1, ...o });
+const PERF_PROFILES = {
+  vista: {
+    targets: {
+      BED_TURNOVER: target(3.4, { milestones: [{ period: '202512', value: 3.1 }] }), READMISSION_30D: target(10), REMOTE_CARE: target(53500),
+      CLAIM_DENIAL: target(1.5), AR_DAYS: target(55), OUTPATIENT_VISITS: target(5900, { baselineTo: '202512' }),
+    },
+    gen: {
+      out: { weekly: 1246, growth: 0.075, newRatio: 0.18, dips: { '2025-W05': 0.68, '2026-W08': 0.68, '2025-W06': 0.86, '2026-W07': 0.86, '2026-W09': 0.86 }, revPerVisit: 91.5 },
+      beds: 260, turnover: [2.8, 0.45], los: [8.5, -0.9], revPerDischarge: 3100, readmit: [13.5, -1.9], readmitCost: 2540,
+      remote: { active: [1500, 1800], arpu: 23.5, costRatio: 0.4 }, otherRevenue: 126800, claimRatio: 0.7, denial: [3.0, -1.3], recovered: 0.006,
+      ar: [75, -9], over90: [0.22, -0.05], badDebt: [1.2, -0.25],
+    },
+    events: true,
+    users: { iface: '연동', upload: '김심사', manual: '이원무', admin: '홍길동' },
+  },
+  cedar: {
+    items: [
+      ['ER_VISITS', '응급실 방문 건수', '건', 'SUM', 'WEEK', 'INTERFACE', 'HIS(응급)', '내원일', null, '2026-W01'],
+      ['ER_ADMITS', '응급실 경유 입원 건수', '건', 'SUM', 'MONTH', 'INTERFACE', 'HIS', '입원일', 'ER_VISITS', '202601'],
+      ['ER_REVENUE', '응급실 진료수익', 'AMOUNT', 'SUM', 'MONTH', 'MANUAL', '원무·회계', '진료일', null, null],
+    ],
+    kpis: [
+      kpiDef({ key: 'ER_VISITS', name: '응급실 방문 건수', category: 'REVENUE', unit: 'COUNT_PER_MONTH', decimals: 0, direction: 'UP', seed: false,
+        formula: { kind: 'EXPRESSION', expression: 'ER_VISITS / months' },
+        ebitda: { method: 'DELTA_X_BASE', scale: 'months', unitValue: 'ER_REVENUE / ER_VISITS', factor: 30, factorBasis: '응급 진료 공헌이익률 30% — 가정, 병원 재무 확인 필요' },
+        subMetrics: [{ name: '입원 전환율', expression: 'ER_ADMITS / ER_VISITS * 100', unit: '%', decimals: 1 }] }),
+    ],
+    templates: { MSPB: { ebitda: { factor: 25, factorBasis: 'BPCI Advanced 공유 절감 비율 25% — 예시' } }, CMS_INCENTIVE: {} },
+    targets: {
+      BED_TURNOVER: target(4.6), READMISSION_30D: target(12.5), REMOTE_CARE: target(190000), CLAIM_DENIAL: target(6),
+      AR_DAYS: target(45), OUTPATIENT_VISITS: target(21800, { baselineTo: '202512' }), ER_VISITS: target(5450, { baselineTo: '202512' }),
+      MSPB: target(0.97), CMS_INCENTIVE: target(40000),
+    },
+    gen: {
+      out: { weekly: 4780, growth: 0.04, newRatio: 0.12, dips: { '2025-W47': 0.88, '2025-W52': 0.72, '2026-W01': 0.85 }, revPerVisit: 238 },
+      beds: 410, turnover: [4.2, 0.35], los: [5.1, -0.4], revPerDischarge: 16800, readmit: [15.8, -2.6], readmitCost: 15200,
+      remote: { active: [800, 2600], arpu: 96, costRatio: 0.45 }, otherRevenue: 2400000, claimRatio: 0.92, denial: [9.5, -3.2], recovered: 0.02,
+      ar: [54, -8], over90: [0.18, -0.04], badDebt: [2.8, -0.6],
+      er: { weekly: 1178, growth: 0.05, admitRate: 0.16, revPerVisit: 1450 },
+      mspb: { episodes: 780, benchmark: 24800, ratio: [1.06, -0.08] },
+      cms: { hvbp: [38000, 40000], hrrp: [-52000, 30000], hacrp: [-21000, 8000], other: 6000 },
+    },
+    missing: [['ER_REVENUE', 'MONTH', '202608']],
+    users: { iface: '연동', upload: 'K. Lee', manual: 'R. Patel', admin: 'J. Miller' },
+  },
 };
 
-/* ---------- 기간별 값 (예시) ---------- */
-function buildValueSeed() {
-  const V = {}, H = {};
+/* ---------- 기간별 값 (예시) — 금액은 보고 통화 ---------- */
+function buildValueSeed(items, prof) {
+  const V = {}, H = {}, g0 = prof.gen, U = prof.users;
   const nz = (i, k) => { const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return (x - Math.floor(x)) * 2 - 1; };
   const months = periodsBetween('MONTH', '202501', LATEST_MONTH);
   const put = (key, cycle, period, value, extra = {}) => {
-    const item = DATA_ITEM_SEED.find(i => i.key === key);
+    const item = items.find(i => i.key === key);
     const iface = item.interfaceFrom && (cycle === 'WEEK' ? isoWeekStart(period) >= isoWeekStart(item.interfaceFrom) : period >= item.interfaceFrom);
     V[valueKey(key, cycle, period)] = { value, status: 'FINAL', source: iface ? 'INTERFACE' : item.collectionMethod === 'INTERFACE' ? 'MANUAL' : item.collectionMethod,
-      updatedAt: iface ? stampOf(period, cycle, 2) : stampOf(period, cycle, 6), updatedBy: iface ? '연동' : item.collectionMethod === 'UPLOAD' ? '김심사' : '이원무', ...extra };
+      updatedAt: iface ? stampOf(period, cycle, 2) : stampOf(period, cycle, 6), updatedBy: iface ? U.iface : item.collectionMethod === 'UPLOAD' ? U.upload : U.manual, ...extra };
   };
-  // 주 단위 외래 — 춘절 주간은 줄고, 1년에 약 7.5%씩 는다
+  // 주 단위 방문 — 명절·연휴 주간은 줄고, 해마다 조금씩 는다
   const weeks = periodsBetween('WEEK', '2025-W01', '2026-W40');
-  const weekly = {};
+  const weeklyOut = {}, weeklyEr = {};
+  const yearsFrom = w => (isoWeekStart(w) - Date.UTC(2025, 0, 1)) / (365 * 864e5);
   weeks.forEach((w, i) => {
-    const t = (isoWeekStart(w) - Date.UTC(2025, 0, 1)) / (365 * 864e5);
-    const festival = w === '2025-W05' || w === '2026-W08' ? 0.68 : w === '2025-W06' || w === '2026-W07' || w === '2026-W09' ? 0.86 : 1;
-    const v = Math.round(1246 * (1 + 0.075 * t) * festival * (1 + 0.03 * nz(i, 1)));
-    weekly[w] = v;
+    const o = g0.out, v = Math.round(o.weekly * (1 + o.growth * yearsFrom(w)) * (o.dips[w] ?? 1) * (1 + 0.03 * nz(i, 1)));
+    weeklyOut[w] = v;
     put('OUTPATIENT_VISITS', 'WEEK', w, v);
-    put('OUTPATIENT_NEW', 'WEEK', w, Math.round(v * (0.18 + 0.01 * nz(i, 2))));
+    put('OUTPATIENT_NEW', 'WEEK', w, Math.round(v * (o.newRatio + 0.01 * nz(i, 2))));
+    if (g0.er) { const e = Math.round(g0.er.weekly * (1 + g0.er.growth * yearsFrom(w)) * (1 + 0.05 * nz(i, 21))); weeklyEr[w] = e; put('ER_VISITS', 'WEEK', w, e); }
   });
+  const monthOfWeeks = (src, m) => Math.round(periodsBetween('WEEK', isoWeekKey(new Date(Date.UTC(+m.slice(0, 4), +m.slice(4) - 1, 1))), isoWeekKey(new Date(Date.UTC(+m.slice(0, 4), +m.slice(4), 0))))
+    .reduce((a, w) => a + src[w] * (weekMonthDays(w)[m] || 0) / 7, 0));
+  const lin = ([a, b], g) => a + b * g;
   months.forEach((m, i) => {
     const g = Math.min(Math.max((i - 2) / 18, 0), 1) ** 0.9;
-    const beds = Math.round(260 + 3 * nz(i, 3));
-    const turnover = 2.8 + 0.45 * g + 0.04 * nz(i, 4);
-    const dis = Math.round(turnover * beds);
+    const beds = Math.round(g0.beds + 3 * nz(i, 3));
+    const dis = Math.round((lin(g0.turnover, g) + 0.04 * nz(i, 4)) * beds);
     put('STAFFED_BEDS', 'MONTH', m, beds);
     put('DISCHARGES', 'MONTH', m, dis);
     put('ADMISSIONS', 'MONTH', m, Math.round(dis * (1.01 + 0.01 * nz(i, 5))));
-    put('PATIENT_DAYS', 'MONTH', m, Math.round(dis * (8.5 - 0.9 * g + 0.1 * nz(i, 6))));
-    const inRev = Math.round(dis * 22000 * (1 + 0.01 * nz(i, 7)));
+    put('PATIENT_DAYS', 'MONTH', m, Math.round(dis * (lin(g0.los, g) + 0.1 * nz(i, 6))));
+    const inRev = Math.round(dis * g0.revPerDischarge * (1 + 0.01 * nz(i, 7)));
     put('INPATIENT_REVENUE', 'MONTH', m, inRev);
-    const readmit = Math.round(dis * (13.5 - 1.9 * g + 0.25 * nz(i, 8)) / 100);
+    const readmit = Math.round(dis * (lin(g0.readmit, g) + 0.25 * nz(i, 8)) / 100);
     put('READMIT_30D', 'MONTH', m, readmit);
-    put('READMIT_COST', 'MONTH', m, readmit * 18000);
-    const active = Math.round(1500 + 1800 * g + 30 * nz(i, 9));
+    put('READMIT_COST', 'MONTH', m, readmit * g0.readmitCost);
+    const active = Math.round(lin(g0.remote.active, g) + 30 * nz(i, 9));
     put('REMOTE_ACTIVE', 'MONTH', m, active);
     put('REMOTE_ENROLLED', 'MONTH', m, Math.round(active * 1.25));
-    const rRev = Math.round(active * 166.7 * (1 + 0.02 * nz(i, 10)));
+    const rRev = Math.round(active * g0.remote.arpu * (1 + 0.02 * nz(i, 10)));
     put('REMOTE_REVENUE', 'MONTH', m, rRev);
-    put('REMOTE_DIRECT_COST', 'MONTH', m, Math.round(rRev * (0.4 + 0.01 * nz(i, 11))));
-    const outV = Math.round(periodsBetween('WEEK', isoWeekKey(new Date(Date.UTC(+m.slice(0, 4), +m.slice(4) - 1, 1))), isoWeekKey(new Date(Date.UTC(+m.slice(0, 4), +m.slice(4), 0))))
-      .reduce((a, w) => a + weekly[w] * (weekMonthDays(w)[m] || 0) / 7, 0));
-    const outRev = Math.round(outV * 650 * (1 + 0.01 * nz(i, 12)));
+    put('REMOTE_DIRECT_COST', 'MONTH', m, Math.round(rRev * (g0.remote.costRatio + 0.01 * nz(i, 11))));
+    const outRev = Math.round(monthOfWeeks(weeklyOut, m) * g0.out.revPerVisit * (1 + 0.01 * nz(i, 12)));
     put('OUTPATIENT_REVENUE', 'MONTH', m, outRev);
-    const patRev = inRev + outRev + rRev + Math.round(900000 * (1 + 0.05 * nz(i, 13)));
+    let erRev = 0;
+    if (g0.er) {
+      const erV = monthOfWeeks(weeklyEr, m);
+      put('ER_ADMITS', 'MONTH', m, Math.round(erV * (g0.er.admitRate + 0.01 * nz(i, 22))));
+      erRev = Math.round(erV * g0.er.revPerVisit * (1 + 0.02 * nz(i, 23)));
+      put('ER_REVENUE', 'MONTH', m, erRev);
+    }
+    const patRev = inRev + outRev + rRev + erRev + Math.round(g0.otherRevenue * (1 + 0.05 * nz(i, 13)));
     put('PATIENT_REVENUE', 'MONTH', m, patRev);
-    const claim = Math.round(patRev * 0.7);
+    const claim = Math.round(patRev * g0.claimRatio);
     const late = i >= months.length - 2;  // 최근 2개월은 심사 결과 전 — 잠정
     put('CLAIM_AMOUNT', 'MONTH', m, claim);
-    put('CLAIM_DENIED', 'MONTH', m, Math.round(claim * (3.0 - 1.3 * g + 0.08 * nz(i, 14)) / 100 * (late ? 0.7 : 1)), late ? { status: 'PROVISIONAL' } : {});
-    put('CLAIM_RECOVERED', 'MONTH', m, Math.round(claim * 0.006 * (1 + 0.1 * nz(i, 15))));
-    const arDays = 75 - 9 * g + 0.8 * nz(i, 16);
+    put('CLAIM_DENIED', 'MONTH', m, Math.round(claim * (lin(g0.denial, g) + 0.08 * nz(i, 14)) / 100 * (late ? 0.7 : 1)), late ? { status: 'PROVISIONAL' } : {});
+    put('CLAIM_RECOVERED', 'MONTH', m, Math.round(claim * g0.recovered * (1 + 0.1 * nz(i, 15))));
+    const arDays = lin(g0.ar, g) + 0.8 * nz(i, 16);
     const bal = Math.round(arDays * patRev / daysInMonth(m));
     put('AR_BALANCE', 'MONTH', m, bal);
-    put('AR_OVER90', 'MONTH', m, Math.round(bal * (0.22 - 0.05 * g)));
-    put('BAD_DEBT', 'MONTH', m, Math.round(patRev * (1.2 - 0.25 * g + 0.04 * nz(i, 17)) / 100));
+    put('AR_OVER90', 'MONTH', m, Math.round(bal * lin(g0.over90, g)));
+    put('BAD_DEBT', 'MONTH', m, Math.round(patRev * (lin(g0.badDebt, g) + 0.04 * nz(i, 17)) / 100));
   });
-  // 누락 — 기한(9/10)이 지난 8월 원격케어 직접비, 기한 임박한 9월 90일 초과 미수금
-  delete V[valueKey('REMOTE_DIRECT_COST', 'MONTH', '202608')];
-  delete V[valueKey('AR_OVER90', 'MONTH', '202609')];
-  // 연동 값 차이 — 연동 전환(2026.01) 전 기간에 병원 시스템이 다시 보낸 값 (D25)
-  [['DISCHARGES', '202511', 12], ['DISCHARGES', '202512', -8], ['PATIENT_DAYS', '202512', 40]].forEach(([k, p, d]) => {
-    const v = V[valueKey(k, 'MONTH', p)]; v.interfaceValue = v.value + d;
+  // 분기 단위 템플릿 항목 — MSPB·CMS 조정액. 최근 분기는 CMS 확정 전이라 잠정
+  const quarters = periodsBetween('QUARTER', '2025Q1', periodOfMonth('QUARTER', LATEST_MONTH));
+  quarters.forEach((q, i) => {
+    const g = Math.min(Math.max((i - 1) / 5, 0), 1), late = i === quarters.length - 1 ? { status: 'PROVISIONAL' } : {};
+    if (g0.mspb) {
+      const ep = Math.round(g0.mspb.episodes * (1 + 0.04 * nz(i, 31)));
+      put('EPISODES', 'QUARTER', q, ep, late);
+      put('MSPB_BENCHMARK', 'QUARTER', q, g0.mspb.benchmark, late);
+      put('EPISODE_SPEND', 'QUARTER', q, Math.round(ep * g0.mspb.benchmark * (lin(g0.mspb.ratio, g) + 0.01 * nz(i, 32))), late);
+    }
+    if (g0.cms) {
+      const c = g0.cms;
+      put('CMS_ADJ_HVBP', 'QUARTER', q, Math.round(lin(c.hvbp, g) * 3 * (1 + 0.05 * nz(i, 33))), late);
+      put('CMS_ADJ_HRRP', 'QUARTER', q, Math.round(lin(c.hrrp, g) * 3 * (1 + 0.05 * nz(i, 34))), late);
+      put('CMS_ADJ_HACRP', 'QUARTER', q, Math.round(lin(c.hacrp, g) * 3 * (1 + 0.05 * nz(i, 35))), late);
+      put('CMS_ADJ_OTHER', 'QUARTER', q, Math.round(c.other * 3 * (1 + 0.1 * nz(i, 36))), late);
+    }
   });
-  // 보정 — 접수 시스템 장애 주간
-  const ov = V[valueKey('OUTPATIENT_VISITS', 'WEEK', '2026-W12')];
-  H[valueKey('OUTPATIENT_VISITS', 'WEEK', '2026-W12')] = [{ value: ov.value - 190, status: 'FINAL', source: 'INTERFACE', updatedAt: '2026-03-23 02:00', updatedBy: '연동' }];
-  Object.assign(ov, { interfaceValue: ov.value - 190, source: 'OVERRIDE', overrideReason: '접수 시스템 장애로 3/18 하루 누락 — 원무과 수기 집계로 보정', updatedAt: '2026-03-24 10:12', updatedBy: '홍길동' });
-  H[valueKey('DISCHARGES', 'MONTH', '202511')] = [{ value: V[valueKey('DISCHARGES', 'MONTH', '202511')].value - 4, status: 'FINAL', source: 'MANUAL', updatedAt: '2025-12-04 09:10', updatedBy: '이원무' }];
+  (prof.missing || []).forEach(([k, c, p]) => delete V[valueKey(k, c, p)]);
+  if (prof.events) {
+    // 누락 — 기한(9/10)이 지난 8월 원격케어 직접비, 기한 임박한 9월 90일 초과 미수금
+    delete V[valueKey('REMOTE_DIRECT_COST', 'MONTH', '202608')];
+    delete V[valueKey('AR_OVER90', 'MONTH', '202609')];
+    // 연동 값 차이 — 연동 전환(2026.01) 전 기간에 병원 시스템이 다시 보낸 값 (D25)
+    [['DISCHARGES', '202511', 12], ['DISCHARGES', '202512', -8], ['PATIENT_DAYS', '202512', 40]].forEach(([k, p, d]) => {
+      const v = V[valueKey(k, 'MONTH', p)]; v.interfaceValue = v.value + d;
+    });
+    // 보정 — 접수 시스템 장애 주간
+    const ov = V[valueKey('OUTPATIENT_VISITS', 'WEEK', '2026-W12')];
+    H[valueKey('OUTPATIENT_VISITS', 'WEEK', '2026-W12')] = [{ value: ov.value - 190, status: 'FINAL', source: 'INTERFACE', updatedAt: '2026-03-23 02:00', updatedBy: U.iface }];
+    Object.assign(ov, { interfaceValue: ov.value - 190, source: 'OVERRIDE', overrideReason: '접수 시스템 장애로 3/18 하루 누락 — 원무과 수기 집계로 보정', updatedAt: '2026-03-24 10:12', updatedBy: U.admin });
+    H[valueKey('DISCHARGES', 'MONTH', '202511')] = [{ value: V[valueKey('DISCHARGES', 'MONTH', '202511')].value - 4, status: 'FINAL', source: 'MANUAL', updatedAt: '2025-12-04 09:10', updatedBy: U.manual }];
+  }
   return { values: V, history: H };
 }
 /* 입력 시각 예시 — 기간 끝 다음 날짜 */
 function stampOf(period, cycle, day) {
   if (cycle === 'WEEK') { const d = new Date(isoWeekStart(period).getTime() + (7 + day % 3) * 864e5); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} 0${day % 3 + 2}:00`; }
-  const n = mIndex(period) + 1, k = mKey(n);
+  const last = monthsOf(cycle, period).slice(-1)[0], k = mKey(mIndex(last) + 1);
   return `${k.slice(0, 4)}-${k.slice(4)}-${String(day).padStart(2, '0')} ${day < 5 ? '02:00' : '17:40'}`;
 }
 
 /* ---------- 저장 ---------- */
-function perfSeed() {
-  const { values, history } = buildValueSeed();
-  const targets = Object.fromEntries(Object.entries(TARGET_SEED).map(([k, t]) => [k, { ...t, updatedAt: '2025-04-10 14:20', updatedBy: '홍길동' }]));
+/* 저장본 형식 번호 — 형식이 다른 저장본은 버리고 예시값으로 다시 시작한다 */
+const PERF_VERSION = 3;
+function perfSeed(hid) {
+  const prof = PERF_PROFILES[hid];
+  const items = [...structuredClone(DATA_ITEM_SEED), ...(prof.items || []).map(dataItem).map(i => ({ ...i, seed: false }))];
+  const kpis = [...structuredClone(KPI_SEED), ...structuredClone(prof.kpis || [])];
+  Object.entries(prof.templates || {}).forEach(([k, over]) => {
+    const t = structuredClone(KPI_TEMPLATES.find(x => x.key === k));
+    (TEMPLATE_ITEMS[k] || []).forEach(row => { if (!items.some(i => i.key === row[0])) items.push(templateItem(row)); });
+    kpis.push({ ...t, ...over, ebitda: { ...t.ebitda, ...(over.ebitda || {}) }, seed: false, enabled: true });
+  });
+  const { values, history } = buildValueSeed(items, prof);
+  const stamp = { updatedAt: '2025-04-10 14:20', updatedBy: prof.users.admin };
+  const targets = Object.fromEntries(Object.entries(prof.targets).map(([k, t]) => [k, { ...t, ...stamp }]));
   return {
-    items: structuredClone(DATA_ITEM_SEED), kpis: structuredClone(KPI_SEED), targets, values, history,
-    kpiHistory: { BED_TURNOVER: [{ changedAt: '2025-06-02 11:05', changedBy: '홍길동', changes: [{ field: '입원 공헌이익률', before: '30%', after: '35%' }] }] },
-    targetHistory: { BED_TURNOVER: [{ ...TARGET_SEED.BED_TURNOVER, milestones: [], updatedAt: '2025-04-10 14:20', updatedBy: '홍길동' }] },
-    version: 1,
+    items, kpis, targets, values, history,
+    kpiHistory: hid === 'vista' ? { BED_TURNOVER: [{ changedAt: '2025-06-02 11:05', changedBy: prof.users.admin, changes: [{ field: '입원 공헌이익률', before: '30%', after: '35%' }] }] } : {},
+    targetHistory: hid === 'vista' ? { BED_TURNOVER: [{ ...prof.targets.BED_TURNOVER, milestones: [], ...stamp }] } : {},
+    version: PERF_VERSION,
   };
 }
 function loadPerf(hid) {
   const s = readStore();
-  return s[hid]?.perf ? s[hid].perf : perfSeed();
+  return s[hid]?.perf?.version === PERF_VERSION ? s[hid].perf : perfSeed(hid);
 }
 function savePerf(hid, perf) {
   const s = readStore();
@@ -206,17 +292,17 @@ const AGGREGATION = { SUM: '합계', END: '기말 값', AVG: '평균' };
 const COLLECTION = { INTERFACE: { label: '연동', icon: 'plug' }, UPLOAD: { label: '파일 업로드', icon: 'file-up' }, MANUAL: { label: '수기 입력', icon: 'pencil' } };
 const CYCLE_LABEL = { WEEK: '주', MONTH: '월', QUARTER: '분기', YEAR: '연' };
 
-/* KPI 값 표시 — 금액은 보고 통화로 바꿔 보인다 */
-function fmtKpi(kpi, v, fx = 1) {
+/* KPI 값 표시 — 금액은 보고 통화 */
+function fmtKpi(kpi, v) {
   if (v == null) return '-';
-  if (kpi.unit === 'AMOUNT') return F.short(v / fx);
+  if (kpi.unit === 'AMOUNT') return F.short(v);
   const u = KPI_UNIT[kpi.unit] || KPI_UNIT.CUSTOM, d = kpi.decimals ?? u.decimals;
   const n = v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   return kpi.unit === '%' ? n + '%' : `${n}${kpi.unit === 'CUSTOM' ? (kpi.unitLabel ? ' ' + kpi.unitLabel : '') : ' ' + u.label}`;
 }
-function fmtUnitValue(unit, decimals, v, fx = 1) {
+function fmtUnitValue(unit, decimals, v) {
   if (v == null) return '-';
-  if (unit === 'AMOUNT') return F.money(v / fx);
+  if (unit === 'AMOUNT') return F.money(v);
   const u = KPI_UNIT[unit] || { label: unit, decimals: 1 };
   return v.toLocaleString('en-US', { minimumFractionDigits: decimals ?? u.decimals, maximumFractionDigits: decimals ?? u.decimals }) + (unit === '%' ? '%' : ' ' + u.label);
 }

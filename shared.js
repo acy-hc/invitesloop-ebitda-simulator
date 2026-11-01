@@ -1,5 +1,5 @@
-/* 병원 EBITDA 시안 공용 스크립트 — 스타일, 병원 데이터, 형식, 차트, 셸, 모달
- * 모든 시안이 같은 병원 데이터를 읽어야 병원 기초정보에서 바꾼 값이 시뮬레이터·병원정보에 그대로 나타난다.
+/* 병원 Dashboard 시안 공용 스크립트 — 스타일, 병원 데이터, 형식, 차트, 셸, 모달
+ * 모든 시안이 같은 병원 데이터를 읽어야 병원 기초정보에서 바꾼 값이 시뮬레이터·병원경영 Dashboard에 그대로 나타난다.
  * <head>에서 Tailwind 스크립트보다 먼저 불러온다. */
 
 /* ---------- 스타일: 호스트 app/globals.css 토큰 + core 컴포넌트 클래스 ---------- */
@@ -125,8 +125,9 @@ const VOLUME_TYPES = [
   { key: 'OUT', label: '외래' },
   { key: 'IN', label: '입원' },
   { key: 'CHK', label: '건강검진' },
+  { key: 'ER', label: '응급실' },
 ];
-const BASE_LABEL = { OUT: '외래 인원', IN: '입원 인원', CHK: '건강검진 인원', SUBS: '활성 구독자', CORP: '기업 대상 인원' };
+const BASE_LABEL = { OUT: '외래 인원', IN: '입원 인원', CHK: '건강검진 인원', ER: '응급실 인원', SUBS: '활성 구독자', CORP: '기업 대상 인원' };
 const BAND_LABEL = { LOW: '하한 · 보수', HIGH: '상한 · 공격' };
 const ALLOCATION_LABEL = { REVENUE_SHARE: '매출비중', SEGMENT_REVENUE: '부문 매출 기준', MEDICAL_ONLY: 'Medical에만', COMMERCE_ONLY: 'Commerce에만' };
 
@@ -152,6 +153,87 @@ const CALC_TYPES = {
 };
 const makeFields = (itemKey, type) => CALC_TYPES[type].fields.map(({ s, ...f }) => ({ key: `${itemKey}.${s}`, ...f }));
 
+/* ---------- 매출 항목 템플릿 (Invites 표준 항목) ----------
+ * 계산엔진에 전용 계산이 있는 항목이다. 병원은 템플릿을 골라 켜고, 모델 값은 병원마다 바꾼다 (D16-c·D16-d).
+ * 입력 도움말(help)은 템플릿에 둔다 — 템플릿을 켠 병원에만 보인다 (D37). */
+const REVENUE_TEMPLATES = {
+  sub: { name: '구독 (Medical·Wellness)', segment: 'Medical', type: 'SUBSCRIPTION', base: 'CHK',
+    desc: '건강검진 수검자와 외래 만성질환자를 Medical·Wellness 구독으로 전환합니다. 구독자 누적(Reservoir)·RPM과 함께 씁니다.',
+    fields: [
+      { key: 'convMed', def: 13, label: 'Medical 전환율', unit: '%', min: 0, max: 60, step: 1, ramp: 80, help: '건강검진 위험군·외래 만성질환자 중 앱에 접속한 사람이 Medical 구독으로 넘어오는 비율입니다. Y1 값에서 Y5 목표까지 매년 같은 폭으로 오릅니다.' },
+      { key: 'convWell', def: 4, label: 'Wellness 전환율', unit: '%', min: 0, max: 30, step: 1, ramp: 10, help: '건강검진 정상군·외래 비만성 환자 중 앱에 접속한 사람이 Wellness 구독으로 넘어오는 비율입니다.' },
+      { key: 'appRate', def: 95, label: '앱 접점률', unit: '%', min: 50, max: 100, step: 1, ramp: 100, help: '대상 환자 중 앱을 설치·접속하는 비율입니다. 전환율은 이 인원을 기준으로 계산합니다.' },
+      { key: 'feeMed', def: 120, label: 'Medical 구독료', unit: '/년', number: true, money: true, ramp: 250, help: 'Medical 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.' },
+      { key: 'feeWell', def: 80, label: 'Wellness 구독료', unit: '/년', number: true, money: true, ramp: 100, help: 'Wellness 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.' },
+    ] },
+  ref: { name: '외래연계 수수료', segment: 'Medical', type: 'REFERRAL_FEE', base: 'OUT',
+    desc: '건강검진 위험군을 외래 진료로 연계하고 진료비의 일부를 수수료로 받습니다. 건강검진 실적이 있어야 계산됩니다.',
+    fields: [
+      { key: 'refRate', def: 12, label: '외래연계율', unit: '%', min: 0, max: 80, step: 1, ramp: 80, help: '건강검진 위험군 중 외래 연계 진료로 이어지는 비율입니다. 거점별 연계 계수를 곱한 값이 거점의 Y1 연계율입니다.' },
+      { key: 'visits', def: 4, label: '연간 방문횟수', unit: '회', min: 1, max: 8, step: 1, help: '연계 환자 1명이 1년에 방문하는 횟수입니다. "실적값 사용"을 켜면 병원 실적 평균으로 바꿉니다.' },
+      { key: 'visitCost', def: 250, label: '방문당 진료비', unit: '', number: true, money: true, ramp: 300, help: '연계 환자의 1회 방문당 평균 진료비입니다. 수수료는 이 금액에 요율을 곱해 계산합니다.' },
+      { key: 'svcFee', def: 25, label: 'Service Fee 요율', unit: '%', min: 10, max: 40, step: 1, help: '연계 진료비 중 수수료로 받는 비율입니다.' },
+    ] },
+  fam: { name: 'Family 구독', segment: 'Medical', type: 'SUBSCRIPTION', base: 'SUBS',
+    desc: '구독자의 가족이 함께 가입하는 구독입니다.',
+    fields: [
+      { key: 'famSize', def: 1.62, label: '구독자당 가족 수', unit: '명', min: 0, max: 3, step: 0.1, help: '구독자 1명당 함께 가입하는 가족 수입니다. Family 구독 매출 = 활성 구독자 × 가족 수 × 구독료.' },
+    ] },
+  corpRev: { name: '기업병원', segment: 'Medical', type: 'SUBSCRIPTION', base: 'CORP', toggle: 'corp',
+    toggleHelp: '기업병원 매출을 계산에 넣을지 정합니다. 끄면 기업병원 매출이 0이 됩니다.',
+    desc: '협력 기업 임직원의 건강검진과 위험군 외래 연계 매출입니다.',
+    fields: [
+      { key: 'corpPen', def: 0.4, label: '기업병원 침투 배율', unit: '×', min: 0.2, max: 2, step: 0.1, help: '기업병원 기본 침투율 곡선(모델 값)에 곱하는 배율입니다. 1.0이면 기본 곡선 그대로입니다.' },
+    ],
+    model: { corpPool: 0, corpPenBase: [0, 0, 0.1, 0.2, 0.3], attendRate: 95, screenConv: 10, screenPrice: 180, atRiskRate: 46, referRate: 20 } },
+  commRev: { name: '커머스 (P1·P2)', segment: 'Commerce', type: 'PER_CASE', base: 'SUBS',
+    desc: '구독자와 기업병원 임직원이 사는 의약품(P1)·건강 소비재(P2) 커머스 매출입니다. Y2부터 생깁니다.',
+    fields: [
+      { key: 'p1', def: false, label: 'P1 Invites Pharma', toggle: true, help: '처방 연계 의약품 커머스(Invites Pharma)를 켭니다. 커머스 매출은 Y2부터 생깁니다.' },
+      { key: 'p2', def: false, label: 'P2 K-Commerce', toggle: true, help: '화장품·건강식품 커머스(K-Commerce)를 켭니다. 커머스 매출은 Y2부터 생깁니다.' },
+      { key: 'coachFee', def: 8, label: 'JITAI 코칭료', unit: '/월', min: 0, max: 30, step: 1, money: true, whenAny: ['p1', 'p2'], help: 'JITAI 맞춤 코칭을 쓰는 구매자의 월 이용료입니다.' },
+    ],
+    model: { commCorpPen: 25, buyRate: 40, p1Price: 120, p1Margin: 15, p1Settle: 75, p2Price: 200, p2Margin: 20 } },
+};
+/* 템플릿 모델 값의 이름·단위 — 매출 항목 편집 모달의 "모델 값" 영역 */
+const MODEL_FIELDS = {
+  corpRev: [
+    { key: 'corpPool', label: '대상 임직원 수', unit: '명' },
+    { key: 'corpPenBase', label: '연차별 기본 침투율', unit: '%', yearly: true },
+    { key: 'attendRate', label: '검진 수검률', unit: '%' },
+    { key: 'screenConv', label: '검진 매출 전환율', unit: '%' },
+    { key: 'screenPrice', label: '검진 단가', money: true },
+    { key: 'atRiskRate', label: '임직원 위험군 비율', unit: '%' },
+    { key: 'referRate', label: '위험군 외래 연계율', unit: '%' },
+  ],
+  commRev: [
+    { key: 'commCorpPen', label: '기업 임직원 직구매 침투율', unit: '%' },
+    { key: 'buyRate', label: '구독자 구매 전환율', unit: '%' },
+    { key: 'p1Price', label: 'P1 객단가', money: true },
+    { key: 'p1Margin', label: 'P1 마진', unit: '%' },
+    { key: 'p1Settle', label: 'P1 정산 비율', unit: '%' },
+    { key: 'p2Price', label: 'P2 객단가', money: true },
+    { key: 'p2Margin', label: 'P2 마진', unit: '%' },
+  ],
+};
+/* 템플릿으로 병원 매출 항목을 만든다. over: { name, base, enabled, fields: { key: 덮을 속성 }, model: { key: 값 } } */
+function fromTemplate(key, over = {}) {
+  const t = structuredClone(REVENUE_TEMPLATES[key]);
+  const { fields: fo = {}, model: mo, ...rest } = over;
+  return {
+    key, template: key, name: t.name, segment: t.segment, type: t.type, base: t.base, enabled: true,
+    ...(t.toggle ? { toggle: t.toggle, toggleHelp: t.toggleHelp } : {}),
+    fields: t.fields.map(f => ({ ...f, ...(fo[f.key] || {}) })),
+    ...(t.model ? { model: { ...t.model, ...(mo || {}) } } : {}),
+    ...rest,
+  };
+}
+/* 산출 방식으로 만든 병원 고유 항목 — defs: { 입력 접미사: 기본값 } */
+function customItem(key, name, segment, type, base, defs = {}) {
+  return { key, name, segment, type, base, enabled: true, custom: true,
+    fields: makeFields(key, type).map(f => ({ ...f, def: defs[f.key.split('.').pop()] ?? f.def })) };
+}
+
 /* ---------- 병원 ---------- */
 const HOSPITAL_SEED = [
   {
@@ -167,30 +249,11 @@ const HOSPITAL_SEED = [
       { key: 'CHK', count: 12102, from: '2025.01', to: '2025.12', months: 12, bySite: { sz: 10156, bj: 1946 } },
     ],
     revenueItems: [
-      { key: 'sub', name: '구독 (Medical·Wellness)', segment: 'Medical', type: 'SUBSCRIPTION', base: 'CHK', enabled: true, fields: [
-        { key: 'convMed', label: 'Medical 전환율', unit: '%', min: 0, max: 60, step: 1, ramp: 80 },
-        { key: 'convWell', label: 'Wellness 전환율', unit: '%', min: 0, max: 30, step: 1, ramp: 10 },
-        { key: 'appRate', label: '앱 접점률', unit: '%', min: 50, max: 100, step: 1, ramp: 100 },
-        { key: 'feeMed', label: 'Medical 구독료', unit: '/년', number: true, money: true, ramp: 250 },
-        { key: 'feeWell', label: 'Wellness 구독료', unit: '/년', number: true, money: true, ramp: 100 },
-      ] },
-      { key: 'ref', name: '외래연계 수수료', segment: 'Medical', type: 'REFERRAL_FEE', base: 'OUT', enabled: true, fields: [
-        { key: 'refRate', label: '외래연계율', unit: '%', min: 0, max: 80, step: 1, ramp: 80 },
-        { key: 'visits', label: '연간 방문횟수', unit: '회', min: 1, max: 8, step: 1, warn: '만성질환 평균 방문 가정 — 실적 대조 전', actual: 3.6 },
-        { key: 'visitCost', label: '방문당 진료비', unit: '', number: true, money: true, warn: 'VISTA 제공 평균 진료비 미확인 — 2024 샘플 기준', actual: 262, ramp: 300 },
-        { key: 'svcFee', label: 'Service Fee 요율', unit: '%', min: 10, max: 40, step: 1, note: '미서명' },
-      ] },
-      { key: 'fam', name: 'Family 구독', segment: 'Medical', type: 'SUBSCRIPTION', base: 'SUBS', enabled: true, fields: [
-        { key: 'famSize', label: '구독자당 가족 수', unit: '명', min: 0, max: 3, step: 0.1, note: '중국통계국' },
-      ] },
-      { key: 'corpRev', name: '기업병원', segment: 'Medical', type: 'SUBSCRIPTION', base: 'CORP', enabled: true, toggle: 'corp', fields: [
-        { key: 'corpPen', label: '기업병원 침투 배율', unit: '×', min: 0.2, max: 2, step: 0.1 },
-      ] },
-      { key: 'commRev', name: '커머스 (P1·P2)', segment: 'Commerce', type: 'PER_CASE', base: 'SUBS', enabled: true, fields: [
-        { key: 'p1', label: 'P1 Invites Pharma', toggle: true },
-        { key: 'p2', label: 'P2 K-Commerce', toggle: true },
-        { key: 'coachFee', label: 'JITAI 코칭료', unit: '/월', min: 0, max: 30, step: 1, money: true, whenAny: ['p1', 'p2'] },
-      ] },
+      fromTemplate('sub'),
+      fromTemplate('ref', { fields: { visits: { actual: 3.6 }, visitCost: { actual: 262 }, svcFee: { note: '미서명' } } }),
+      fromTemplate('fam', { fields: { famSize: { note: '중국통계국' } } }),
+      fromTemplate('corpRev', { model: { corpPool: 800000 } }),
+      fromTemplate('commRev'),
     ],
     defaults: { convMed: 13, convWell: 4, refRate: 12, appRate: 95, feeMed: 120, feeWell: 80, visitCost: 250, visits: 4, svcFee: 25, famSize: 1.62, opexRate: 22, mktgRate: 38, bizdevK: 550, omRate: 5, reservoir: true, churn0: 25, rpmAdopt: 35, rpmDelta: 35, corp: true, corpPen: 0.4, p1: false, p2: false, coachFee: 8, hcAttr: false },
     reservoir: true,
@@ -201,21 +264,55 @@ const HOSPITAL_SEED = [
       { key: 'reg', name: '규제강화', band: null, desc: '처방 커머스 불가, 확산 둔화', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5, p1: false, p2: true }, updatedBy: '김분석', updatedAt: '2026.10.11' },
       { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5, p1: false, p2: false }, updatedBy: '김분석', updatedAt: '2026.10.14' },
     ],
-    profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, fxRates: [{ year: 2025, rate: 7.1 }], fxBasis: '2025 평균 환율', version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
+    profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
     params: [
       { key: 'OUT', risk: null, growth: 3 },
       { key: 'IN', risk: null, growth: 2 },
       { key: 'CHK', risk: 46.2, growth: 3 },
     ],
-    /* 프로토타입 고정값 — 화면에서 바꾸지 않는다 */
-    model: { corpPool: 800000, corpPenBase: [0, 0, 0.1, 0.2, 0.3], commCorpPen: 25 },
     assumptions: [
-      { label: '방문당 진료비', value: '250', unit: '$', basis: '2024 샘플 기준 — VISTA 평균 진료비 미확인', verified: false, validFrom: '2026.01.01', scope: '병원' },
-      { label: '연간 방문횟수', value: '4', unit: '회', basis: '만성질환 평균 방문 가정 — 실적 대조 전', verified: false, validFrom: '2026.01.01', scope: '병원' },
-      { label: 'RPM 이탈감소 효과 δ', value: '35', unit: '%', basis: '국내 RPM 연구 인용값', verified: false, validFrom: '2026.01.01', scope: '시스템' },
-      { label: '구독자당 가족 수', value: '1.62', unit: '명', basis: '중국통계국 2023 평균 가구원 수 기준', verified: true, validFrom: '2026.01.01', scope: '병원' },
-      { label: 'Service Fee 요율', value: '25', unit: '%', basis: '계약 협상안 (미서명)', verified: false, validFrom: '2026.01.01', scope: '병원' },
+      { label: '방문당 진료비', value: '250', unit: '', money: true, basis: '2024 샘플 기준 — VISTA 평균 진료비 미확인', validFrom: '2026.01.01', scope: '병원' },
+      { label: '연간 방문횟수', value: '4', unit: '회', basis: '만성질환 평균 방문 가정 — 실적 대조 전', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'RPM 이탈감소 효과 δ', value: '35', unit: '%', basis: '국내 RPM 연구 인용값', validFrom: '2026.01.01', scope: '시스템' },
+      { label: '구독자당 가족 수', value: '1.62', unit: '명', basis: '중국통계국 2023 평균 가구원 수 기준', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'Service Fee 요율', value: '25', unit: '%', basis: '계약 협상안 (미서명)', validFrom: '2026.01.01', scope: '병원' },
+    ],
+  },
+  /* 미국 예시 병원 — 외래·입원·응급실, 단일 거점, USD. 이름과 값은 시안용 예시다 */
+  {
+    id: 'cedar', name: 'Cedar Valley Medical Center', code: 'H-0002', country: '미국', currency: 'USD', report: 'USD',
+    fx: null, baseYear: 2025, locations: ['본원'], receivedAt: '2026.01.20',
+    sites: [{ key: 'main', name: '본원', chronic: 32, referral: 1 }],
+    volumes: [
+      { key: 'OUT', count: 248600, from: '2025.01', to: '2025.12', months: 12 },
+      { key: 'IN', count: 21450, from: '2025.01', to: '2025.12', months: 12 },
+      { key: 'ER', count: 61280, from: '2025.01', to: '2025.12', months: 12 },
+    ],
+    revenueItems: [
+      fromTemplate('sub', { name: '만성질환 관리 구독 (Medical·Wellness)', base: 'OUT', fields: { convMed: { ramp: 12 }, convWell: { ramp: 4 }, appRate: { ramp: 85 }, feeMed: { ramp: 480 }, feeWell: { ramp: 180 } } }),
+      customItem('rpmBill', 'RPM 원격 모니터링 청구', 'Medical', 'PER_CASE', 'OUT', { ratio: 2.5, price: 1150 }),
+      customItem('erFollow', '응급실 퇴원 후속 진료 연계', 'Medical', 'REFERRAL_FEE', 'ER', { rate: 6, visits: 2, cost: 420, fee: 12 }),
+      customItem('tcm', '퇴원 후 전환기 관리(TCM)', 'Medical', 'PER_CASE', 'IN', { ratio: 18, price: 260 }),
+    ],
+    defaults: { convMed: 5, convWell: 1.5, appRate: 60, feeMed: 360, feeWell: 120, opexRate: 24, mktgRate: 30, bizdevK: 400, omRate: 5, reservoir: true, churn0: 22, rpmAdopt: 40, rpmDelta: 30, hcAttr: false },
+    reservoir: true,
+    presets: [
+      { key: 'low', name: '보수', band: 'LOW', desc: '전환이 더디고 마케팅비가 높은 하한 가정', set: { convMed: 4, convWell: 1, appRate: 55, opexRate: 26, mktgRate: 34, bizdevK: 450, omRate: 6 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
+      { key: 'base', name: '기준', band: null, desc: '병원 재무팀과 맞춘 기준 가정', set: { convMed: 5, convWell: 1.5, appRate: 60, opexRate: 24, mktgRate: 30, bizdevK: 400, omRate: 5 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
+      { key: 'high', name: '공격', band: 'HIGH', desc: '앱 접점률과 RPM 확산이 빠른 상한 가정', set: { convMed: 8, convWell: 2.5, appRate: 75, opexRate: 22, mktgRate: 24, bizdevK: 350, omRate: 4, rpmAdopt: 55 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
+    ],
+    profile: { laborUnitCost: 96000, laborInflation: 3.5, laborInflationBasis: '병원 HR 2026 임금 인상안', staff: [6, 9, 12, 15, 18], royaltyRate: 8, taxRate: 21, taxLossYears: 0, depreciation: [120000, 120000, 180000, 180000, 180000], capex: [600000, 0, 300000, 0, 0], wacc: 10, growth: 2.5, nwcRate: 2, version: 1, updatedAt: '2026.10.06 09:40', updatedBy: 'J. Miller' },
+    allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
+    params: [
+      { key: 'OUT', risk: null, growth: 2 },
+      { key: 'IN', risk: null, growth: 1.5 },
+      { key: 'ER', risk: null, growth: 3 },
+    ],
+    assumptions: [
+      { label: 'RPM 청구 단가 (연)', value: '1150', unit: '', money: true, basis: 'CMS 2026 RPM 수가(CPT 99454·99457) 연 환산 — 예시', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'RPM 이탈감소 효과 δ', value: '30', unit: '%', basis: '병원 원격관리 파일럿 2025', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'TCM 청구 단가', value: '260', unit: '', money: true, basis: 'CPT 99495 평균 — 예시', validFrom: '2026.01.01', scope: '병원' },
     ],
   },
 ];
@@ -227,6 +324,11 @@ const SCENARIO_SEED = {
     { id: 's3', name: '상단 시나리오', desc: '', preset: 'aggr', version: 1, updatedAt: '2026-10-20 17:45' },
     { id: 's4', name: '규제 대응', desc: '', preset: 'reg', version: 1, updatedAt: '2026-10-18 11:03' },
     { id: 's5', name: '요율 15% 협상안', desc: '', preset: 'feecut', version: 4, updatedAt: '2026-10-16 16:20' },
+  ],
+  cedar: [
+    { id: 's1', name: '이사회 보고안', desc: '2027 예산 이사회 보고용', preset: 'base', version: 2, updatedAt: '2026-10-22 10:05' },
+    { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-10-15 16:40' },
+    { id: 's3', name: 'RPM 확산 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-10-15 16:52' },
   ],
 };
 
@@ -240,14 +342,31 @@ function loadHospitals() {
   return HOSPITAL_SEED.map(h => {
     const c = structuredClone(h);
     if (s[h.id]?.presets) c.presets = s[h.id].presets;
-    ['revenueItems', 'profile', 'params', 'sites', 'allocation'].forEach(k => { if (s[h.id]?.[k]) c[k] = s[h.id][k]; });
+    ['revenueItems', 'profile', 'params', 'sites', 'allocation', 'defaults'].forEach(k => { if (s[h.id]?.[k]) c[k] = s[h.id][k]; });
+    c.revenueItems = c.revenueItems.map(it => {
+      const seed = h.revenueItems.find(x => x.key === it.key);
+      if (!seed?.template || it.template) return it;
+      return { ...it, template: seed.template, toggleHelp: seed.toggleHelp, model: seed.model, fields: it.fields.map(fl => ({ ...seed.fields.find(x => x.key === fl.key), ...fl })) };
+    });
     return c;
   });
 }
 function saveHospital(h) {
   const s = readStore();
-  s[h.id] = { ...s[h.id], presets: h.presets, revenueItems: h.revenueItems, profile: h.profile, params: h.params, sites: h.sites, allocation: h.allocation };
+  s[h.id] = { ...s[h.id], presets: h.presets, revenueItems: h.revenueItems, profile: h.profile, params: h.params, sites: h.sites, allocation: h.allocation, defaults: h.defaults };
   writeStore(s);
+}
+/* 고른 병원 — URL 쿼리 hospitalId가 우선이고, 없으면 이 브라우저에서 마지막으로 고른 병원 */
+function currentHospitalId() {
+  const ids = HOSPITAL_SEED.map(h => h.id), q = new URLSearchParams(location.search).get('hospitalId');
+  if (ids.includes(q)) { const st = readStore(); if (st.selectedHospital !== q) writeStore({ ...st, selectedHospital: q }); return q; }
+  const saved = readStore().selectedHospital;
+  return ids.includes(saved) ? saved : ids[0];
+}
+/* 병원을 바꾸면 같은 화면을 그 병원으로 다시 연다 — 화면마다 병원 데이터를 처음에 한 번 읽기 때문이다 */
+function switchHospital(id) {
+  writeStore({ ...readStore(), selectedHospital: id });
+  const u = new URL(location.href); u.searchParams.set('hospitalId', id); location.href = u.toString();
 }
 /* 시나리오 목록 — 비교 창이 시뮬레이터에서 만든·저장한 시나리오를 읽는다 */
 function loadScenarios(hid) { return readStore()[hid]?.scenarios || structuredClone(SCENARIO_SEED[hid]); }
@@ -267,20 +386,15 @@ function valuation(years, wacc, growth) {
 }
 
 const annualized = v => Math.round(v.count * 12 / v.months);
-/* 연도별 고정 환율 — 보고 통화 1 = rate 병원 통화. 없는 연도는 앞 연도 값을 이어 쓴다 (D10-a) */
-function fxRate(h, year) {
-  if (h.currency === h.report) return 1;
-  const list = [...(h.profile.fxRates || [])].sort((a, b) => a.year - b.year);
-  let rate = list[0]?.rate ?? 1;
-  list.forEach(r => { if (r.year <= year) rate = r.rate; });
-  return rate;
-}
 const periodText = v => `${v.from} ~ ${v.to}`;
 
 /* ---------- 형식 ---------- */
-let CUR = { code: 'USD', sym: '$', unit: 'USD' };
+/* 금액 단위 — 네 화면 모두 병원 기초정보의 보고 통화 하나를 쓴다. 화면마다 통화를 따로 정하면 같은 병원의 금액이 화면끼리 맞지 않는다 (D10-b) */
+const CURRENCY_SYMBOL = { USD: '$', KRW: '₩', CNY: '¥', JPY: '¥', EUR: '€' };
+let CUR = { code: 'USD', sym: '$', unit: 'USD', kUnit: '천$' };
 function useCurrency(h) {
-  CUR = h.report === 'KRW' ? { code: 'KRW', sym: '₩', unit: '백만원' } : { code: 'USD', sym: '$', unit: 'USD' };
+  const code = h.report, sym = CURRENCY_SYMBOL[code] ?? `${code} `;
+  CUR = code === 'KRW' ? { code, sym, unit: '백만원', kUnit: '백만원' } : { code, sym, unit: code, kUnit: `천${sym}` };
 }
 const F = {
   money: v => (v < 0 ? '-' : '') + CUR.sym + Math.abs(Math.round(v)).toLocaleString('en-US'),
@@ -288,7 +402,7 @@ const F = {
   short: v => {
     const a = Math.abs(v), s = v < 0 ? '-' : '';
     if (CUR.code === 'KRW') return a >= 1e8 ? `${s}${(a / 1e8).toFixed(1)}억` : a >= 1e6 ? `${s}${Math.round(a / 1e6)}백만` : `${s}${Math.round(a).toLocaleString()}`;
-    return a >= 1e6 ? `${s}$${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${s}$${Math.round(a / 1e3)}K` : `${s}$${Math.round(a)}`;
+    return a >= 1e6 ? `${s}${CUR.sym}${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${s}${CUR.sym}${Math.round(a / 1e3)}K` : `${s}${CUR.sym}${Math.round(a)}`;
   },
   pct: (v, d = 1) => (v * 100).toFixed(d) + '%',
   int: v => Math.round(v).toLocaleString('en-US'),
@@ -479,11 +593,11 @@ function yearTable({ rows, selected, baseYear = 2025, change = true }) {
 /* ---------- 셸: 사이드바·헤더·페이지 제목 (features/shell) ---------- */
 /* guide: 사용 가이드를 열 절. 주면 제목 옆에 가이드 버튼을 둔다 */
 function mountShell({ active, title, footer, guide }) {
+  const hid = currentHospitalId();
   const nav = [
-    { key: 'simulator', label: '시뮬레이터', icon: 'calculator', href: 'simulator.html' },
-    { key: 'performance', label: '병원정보', icon: 'activity', href: 'performance.html' },
-    { key: 'hospital', label: '병원 기초정보', icon: 'hospital', href: 'hospital.html' },
-    { key: 'kpi-setting', label: '성과 설정', icon: 'settings-2', href: 'kpi-setting.html' },
+    { key: 'simulator', label: '병원 EBITDA 시뮬레이터', icon: 'calculator', href: 'simulator.html' },
+    { key: 'performance', label: '병원경영 Dashboard', icon: 'activity', href: 'performance.html' },
+    { key: 'hospital-setting', label: '병원정보 설정', icon: 'settings-2', href: 'hospital-setting.html' },
   ];
   const navCls = 'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium';
   document.body.innerHTML = `
@@ -491,14 +605,14 @@ function mountShell({ active, title, footer, guide }) {
     <aside class="fixed start-0 top-0 z-40 hidden h-screen w-[260px] flex-col border-e border-sidebar-border bg-sidebar lg:flex">
       <div class="flex h-16 shrink-0 items-center gap-3 border-b border-sidebar-border px-4">
         <div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-white"><i data-lucide="sparkles" class="size-4"></i></div>
-        <span class="truncate text-sm font-bold tracking-tight text-sidebar-foreground">VISTA invitesLoop</span>
+        <span class="truncate text-sm font-bold tracking-tight text-sidebar-foreground">invitesLoop</span>
       </div>
       <nav aria-label="주 메뉴" class="flex-1 space-y-3 overflow-y-auto px-3 py-4">
         <div>
-          <div class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-sidebar-foreground/70"><span class="flex-1">병원 EBITDA</span><i data-lucide="chevron-down" class="size-3"></i></div>
+          <div class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-sidebar-foreground/70"><span class="flex-1">병원 Dashboard</span><i data-lucide="chevron-down" class="size-3"></i></div>
           <div class="mt-1 space-y-0.5">${nav.map(n => n.key === active
-            ? `<a href="${n.href}" aria-current="page" class="${navCls} bg-sidebar-accent text-sidebar-primary"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-primary"></i><span class="flex-1">${n.label}</span></a>`
-            : `<a href="${n.href}" class="${navCls} text-sidebar-foreground/70 transition-all hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-foreground/50"></i><span class="flex-1">${n.label}</span></a>`).join('')}
+            ? `<a href="${n.href}?hospitalId=${hid}" aria-current="page" class="${navCls} bg-sidebar-accent text-sidebar-primary"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-primary"></i><span class="flex-1">${n.label}</span></a>`
+            : `<a href="${n.href}?hospitalId=${hid}" class="${navCls} text-sidebar-foreground/70 transition-all hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"><i data-lucide="${n.icon}" class="size-[18px] shrink-0 text-sidebar-foreground/50"></i><span class="flex-1">${n.label}</span></a>`).join('')}
           </div>
         </div>
       </nav>
@@ -507,7 +621,8 @@ function mountShell({ active, title, footer, guide }) {
       <header class="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b bg-background/80 px-4 backdrop-blur-xl sm:px-6">
         <div class="flex min-w-0 items-center gap-3">
           <button type="button" aria-label="메뉴 열기" class="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground lg:hidden"><i data-lucide="menu" class="size-5"></i></button>
-          <span class="truncate text-sm font-semibold">VISTA 헬스케어</span>
+          <label class="flex min-w-0 items-center gap-2 text-sm"><span class="hidden shrink-0 text-muted-foreground sm:inline">병원</span>
+            <select id="hospitalSelect" class="select h-8 w-56 sm:w-72" aria-label="병원">${loadHospitals().map(h => `<option value="${h.id}" ${h.id === hid ? 'selected' : ''}>${esc(h.name)} (${h.country})</option>`).join('')}</select></label>
         </div>
         <div class="flex shrink-0 items-center gap-2">
           <button type="button" id="themeToggle" aria-label="다크 모드 전환" class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -524,7 +639,7 @@ function mountShell({ active, title, footer, guide }) {
       <main id="main-content" class="min-w-0 flex-1 p-4 sm:p-6">
         <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div class="flex flex-wrap items-center gap-3"><h1 class="text-2xl font-bold tracking-tight">${title}</h1>${guide ? `<button type="button" data-guide="${guide}" class="btn btn-outline btn-sm" title="사용 가이드 (?)"><i data-lucide="book-open"></i>사용 가이드</button>` : ''}</div>
-          <nav aria-label="breadcrumb" class="flex items-center gap-1.5 text-sm text-muted-foreground"><span>병원 EBITDA</span><i data-lucide="chevron-right" class="size-3.5"></i><span class="text-foreground">${title}</span></nav>
+          <nav aria-label="breadcrumb" class="flex items-center gap-1.5 text-sm text-muted-foreground"><span>병원 Dashboard</span><i data-lucide="chevron-right" class="size-3.5"></i><span class="text-foreground">${title}</span></nav>
         </div>
         <div id="page" class="space-y-6"></div>
       </main>
@@ -536,6 +651,7 @@ function mountShell({ active, title, footer, guide }) {
   </div>`;
   initTooltip();
   if (guide) initGuideTriggers();
+  document.getElementById('hospitalSelect').addEventListener('change', e => switchHospital(e.target.value));
   document.getElementById('themeToggle').addEventListener('click', () => document.documentElement.classList.toggle('dark'));
   document.getElementById('resetMockup').addEventListener('click', () => { resetStore(); location.reload(); });
   return document.getElementById('page');
@@ -615,24 +731,9 @@ const segBadge = seg => `<span class="badge ${seg === 'Commerce' ? 'badge-outlin
 
 /* ---------- 도움말: 툴팁 문구와 사용 가이드 용어집이 같은 문장을 쓴다 ---------- */
 const FIELD_HELP = {
-  convMed: '건강검진 위험군 중 앱에 접속한 사람이 Medical 구독으로 넘어오는 비율입니다. Y1 값에서 Y5 목표까지 매년 같은 폭으로 오릅니다.',
-  convWell: '건강검진 정상군 중 앱에 접속한 사람이 Wellness 구독으로 넘어오는 비율입니다.',
-  appRate: '건강검진 수검자 중 앱을 설치·접속하는 비율입니다. 전환율은 이 인원을 기준으로 계산합니다.',
-  feeMed: 'Medical 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.',
-  feeWell: 'Wellness 구독자 1명이 1년에 내는 구독료입니다. Y1 값에서 Y5 목표까지 오릅니다.',
-  refRate: '건강검진 위험군 중 외래 연계 진료로 이어지는 비율입니다. 거점별 연계 계수를 곱한 값이 거점의 Y1 연계율입니다.',
-  visits: '연계 환자 1명이 1년에 방문하는 횟수입니다. "실적값 사용"을 켜면 병원 실적 평균으로 바꿉니다.',
-  visitCost: '연계 환자의 1회 방문당 평균 진료비입니다. 수수료는 이 금액에 요율을 곱해 계산합니다.',
-  svcFee: '연계 진료비 중 수수료로 받는 비율입니다. 계약 서명 전이라 협상안 값입니다.',
-  famSize: '구독자 1명당 함께 가입하는 가족 수입니다. Family 구독 매출 = 활성 구독자 × 가족 수 × 구독료.',
-  corp: '기업병원 매출을 계산에 넣을지 정합니다. 끄면 기업병원 매출이 0이 됩니다.',
-  corpPen: '기업병원 기본 침투율 곡선에 곱하는 배율입니다. 1.0이면 기본 곡선 그대로입니다.',
-  p1: '처방 연계 의약품 커머스(Invites Pharma)를 켭니다. 커머스 매출은 Y2부터 생깁니다.',
-  p2: '한국 화장품·건강식품 커머스(K-Commerce)를 켭니다. 커머스 매출은 Y2부터 생깁니다.',
-  coachFee: 'JITAI 맞춤 코칭을 쓰는 구독자의 월 이용료입니다.',
   opexRate: '매출 대비 운영비 비율입니다.',
   mktgRate: '매출 대비 마케팅·고객획득비용(CAC)·간접비 비율입니다. Y1은 이 값에서 시작해 Y5 목표(기본은 절반)까지 매년 같은 폭으로 줄어듭니다.',
-  bizdevK: '사업 초기(Y1~Y2)에만 드는 사업개발비입니다. 단위는 천 달러입니다.',
+  bizdevK: '사업 초기(Y1~Y2)에만 드는 사업개발비입니다. 단위는 천 단위 보고 통화입니다.',
   omRate: '매출 대비 시스템 유지보수비 비율입니다.',
   reservoir: '구독자를 해마다 누적하고 이탈률만큼 빼는 계산입니다. 끄면 그해 신규 전환자만 매출에 반영합니다.',
   churn0: 'RPM을 쓰지 않는 구독자가 1년 안에 해지하는 비율입니다.',
@@ -673,7 +774,6 @@ const GLOSSARY = {
   '산출 방식': '매출 항목의 계산 방식입니다. 방식에 따라 시뮬레이터에 나오는 입력 항목이 정해집니다.',
   부문: 'Medical(진료·구독)과 Commerce(커머스)로 매출과 비용을 나눠 봅니다.',
   'Y5 목표': '값이 Y1에서 시작해 Y5에 이 목표에 닿도록 매년 같은 폭으로 바뀝니다. 비워 두면 회색으로 보이는 기본 목표를 씁니다.',
-  '미검증 가정': '병원 실적이나 계약으로 확인되지 않은 입력입니다. ⚠로 표시하고 가정·가드레일에 모아 보여 줍니다.',
   '실적값 사용': '켜면 가정값 대신 병원 실적으로 계산한 값을 씁니다.',
   '직접 입력': '켜면 병원 실적 대신 직접 입력한 인원으로 계산합니다.',
   '수식 세트': '계산에 쓰는 수식 묶음입니다. 초안으로 저장한 뒤 승인해야 시나리오 계산에 반영됩니다.',
@@ -684,7 +784,7 @@ const GLOSSARY = {
   운전자본: '매출채권·재고처럼 영업에 묶이는 돈입니다. 늘어나면 FCF가 줄어듭니다.',
   'EBITDA 효과': 'KPI가 기준값에서 움직인 만큼을 EBITDA 금액으로 바꾼 값입니다. 병원 전체 EBITDA가 아니라 기준 기간 대비 개선분입니다.',
   '현금흐름 효과': '미수채권 회수가 빨라져 풀린 현금입니다. EBITDA가 아니므로 EBITDA 효과에 더하지 않습니다.',
-  연환산: '집계 기간이 12개월보다 짧을 때 실적 인원 × 12 ÷ 개월 수로 1년 치를 추정한 값입니다. 병원정보에서는 최근 3개 확정 기간 효과의 평균 × 1년 기간 수입니다.',
+  연환산: '집계 기간이 12개월보다 짧을 때 실적 인원 × 12 ÷ 개월 수로 1년 치를 추정한 값입니다. 병원경영 Dashboard에서는 최근 3개 확정 기간 효과의 평균 × 1년 기간 수입니다.',
   '기준 기간': 'KPI 개선을 재기 시작하는 기간입니다. 이 기간의 KPI 값 하나가 기준값입니다(분자·분모를 기간 전체로 합산).',
   '계획 경로': '기준값에서 목표값까지 기간마다 같은 폭으로 움직이는 선입니다. 중간 목표가 있으면 구간마다 직선입니다.',
   진척률: '(현재값 − 기준값) ÷ (목표값 − 기준값). 100%면 목표에 닿은 것입니다.',

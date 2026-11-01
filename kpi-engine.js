@@ -83,12 +83,30 @@ function monthValue(item, values, m) {
 
 /* 여러 달을 하나로 — SUM은 더하고, END는 마지막 달, AVG는 일수 가중 평균 */
 function aggregate(item, values, months) {
+  if (item.cycle === 'QUARTER') return aggregateQuarters(item, values, months);
   let sum = 0, wsum = 0, status = 'FINAL', last = null;
   for (const m of months) {
     const v = monthValue(item, values, m);
     if (!v || v.value == null) return null;
     if (v.status === 'PROVISIONAL') status = 'PROVISIONAL';
     const d = daysInMonth(m);
+    if (item.aggregation === 'SUM') sum += v.value;
+    else if (item.aggregation === 'AVG') { sum += v.value * d; wsum += d; }
+    last = v.value;
+  }
+  return { value: item.aggregation === 'SUM' ? sum : item.aggregation === 'AVG' ? sum / wsum : last, status };
+}
+
+/* 분기 단위 항목 — 달 목록이 온전한 분기로 나뉠 때만 값이 있다. 분기 값을 달로 쪼개지 않는다 */
+function aggregateQuarters(item, values, months) {
+  const qs = [...new Set(months.map(m => periodOfMonth('QUARTER', m)))];
+  if (qs.some(q => !monthsOf('QUARTER', q).every(m => months.includes(m)))) return null;
+  let sum = 0, wsum = 0, status = 'FINAL', last = null;
+  for (const q of qs) {
+    const v = values[valueKey(item.key, 'QUARTER', q)];
+    if (!v || v.value == null) return null;
+    if (v.status === 'PROVISIONAL') status = 'PROVISIONAL';
+    const d = monthsOf('QUARTER', q).reduce((a, m) => a + daysInMonth(m), 0);
     if (item.aggregation === 'SUM') sum += v.value;
     else if (item.aggregation === 'AVG') { sum += v.value * d; wsum += d; }
     last = v.value;
@@ -175,10 +193,9 @@ function statusOf(kpi, target, base, last) {
 }
 
 /* ---------- 계산 ---------- */
-/* ctx: { hospital, kpis, targets, items, values, cycle, from, to, latestMonth, fx(year) → 환율 } */
+/* ctx: { kpis, targets, items, values, cycle, from, to, latestMonth } — 금액은 보고 통화 그대로 계산한다 */
 function computeKpis(ctx) {
   const cycle = ctx.cycle, keys = periodsBetween(cycle, ctx.from, ctx.to), latestIdx = mIndex(ctx.latestMonth);
-  const ppy = PERIODS_PER_YEAR[cycle];
   const results = ctx.kpis.filter(k => k.enabled).map(kpi => {
     const target = ctx.targets[kpi.key] || null, need = kpiItemKeys(kpi);
     // 기준값 — 기준 기간 전체를 한 기간으로 합쳐 계산한다 (D28)
@@ -192,10 +209,18 @@ function computeKpis(ctx) {
       } else base = target.baselineValue ?? null;
     }
     const baseEnd = target ? mIndex(target.baselineTo) : Infinity;
+    /* KPI 측정 주기가 조회 주기보다 길면(분기 KPI를 월로 볼 때) KPI 기간이 끝나는 칸에만 값을 둔다. 사이 칸은 BETWEEN — 누락이 아니다 */
+    const kc = CYCLE_ORDER[kpi.cycle] > CYCLE_ORDER[cycle] ? kpi.cycle : cycle, kppy = PERIODS_PER_YEAR[kc];
     const periods = keys.map(p => {
-      const months = monthsOf(cycle, p), endIdx = mIndex(months[months.length - 1]);
+      let months = monthsOf(cycle, p);
+      const endIdx = mIndex(months[months.length - 1]);
       const out = { period: p, value: null, status: 'MISSING', plan: null, baseline: base, ebitdaEffect: null, planEffect: null, cashEffect: null, subMetrics: [], future: endIdx > latestIdx };
       if (out.future) { out.status = 'FUTURE'; out.plan = target && base != null ? planAt(target, base, endIdx) : null; return out; }
+      if (kc !== cycle) {
+        const km = monthsOf(kc, periodOfMonth(kc, months[months.length - 1]));
+        if (km[km.length - 1] !== months[months.length - 1]) { out.status = 'BETWEEN'; out.plan = target && base != null ? planAt(target, base, endIdx) : null; return out; }
+        months = km;
+      }
       const r = varsFor(ctx, months, need);
       out.plan = target && base != null ? planAt(target, base, endIdx) : null;
       if (!r.vars) { out.missingItem = r.missing; return out; }
@@ -209,12 +234,11 @@ function computeKpis(ctx) {
         return sv.vars ? evalExpr(s.expression, { ...vars, ...sv.vars }) : null;
       });
       if (endIdx > baseEnd && base != null) {
-        const fx = ctx.fx(+months[months.length - 1].slice(0, 4));
         const eff = ebitdaEffect(kpi, out.value, base, vars), cash = cashEffect(kpi, out.value, base, vars);
-        out.ebitdaEffect = eff == null ? null : eff / fx;
-        out.cashEffect = cash == null ? null : cash / fx;
-        if (out.plan != null) { const pe = ebitdaEffect(kpi, out.plan, base, vars); out.planEffect = pe == null ? null : pe / fx; }
-        out.vars = vars; out.fx = fx;
+        out.ebitdaEffect = eff;
+        out.cashEffect = cash;
+        if (out.plan != null) out.planEffect = ebitdaEffect(kpi, out.plan, base, vars);
+        out.vars = vars;
       }
       return out;
     });
@@ -224,12 +248,12 @@ function computeKpis(ctx) {
     const progress = target && base != null && last ? (last.value - base) / (target.targetValue - base) : null;
     const effFinals = finals.filter(p => p.ebitdaEffect != null);
     const recent = effFinals.slice(-3);
-    const annualized = recent.length ? recent.reduce((a, p) => a + p.ebitdaEffect, 0) / recent.length * ppy : 0;
+    const annualized = recent.length ? recent.reduce((a, p) => a + p.ebitdaEffect, 0) / recent.length * kppy : 0;
     const lastVars = [...periods].reverse().find(p => p.vars);
     let targetAnnualized = null;
     if (target && base != null && lastVars && kpi.ebitda.method !== 'NONE') {
       const te = ebitdaEffect(kpi, target.targetValue, base, lastVars.vars);
-      targetAnnualized = te == null ? null : te / lastVars.fx * ppy;
+      targetAnnualized = te == null ? null : te * kppy;
     }
     return {
       kpiKey: kpi.key, kpi, target, base, periods, current: last, latest: lastAny, progress,
