@@ -597,9 +597,10 @@ function mountShell({ active, title, footer, guide }) {
   const hid = currentHospitalId();
   const nav = [
     { key: 'simulator', label: '병원 EBITDA 시뮬레이터', icon: 'calculator', href: 'simulator.html' },
-    { key: 'performance', label: '병원경영 Dashboard', icon: 'activity', href: 'performance.html' },
+    /* 병원경영 Dashboard 시안은 다시 만들 예정이라 메뉴에 두지 않는다. 화면 파일(performance.html)은 주소로 열 수 있다 */
+    { key: 'performance', label: '병원경영 Dashboard', icon: 'activity', href: 'performance.html', hidden: true },
     { key: 'hospital-setting', label: '병원정보 설정', icon: 'settings-2', href: 'hospital-setting.html' },
-  ];
+  ].filter(n => !n.hidden);
   const navCls = 'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium';
   document.body.innerHTML = `
   <div class="min-h-screen bg-background">
