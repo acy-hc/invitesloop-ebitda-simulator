@@ -356,12 +356,13 @@ function saveHospital(h) {
   s[h.id] = { ...s[h.id], presets: h.presets, revenueItems: h.revenueItems, profile: h.profile, params: h.params, sites: h.sites, allocation: h.allocation, defaults: h.defaults };
   writeStore(s);
 }
-/* 고른 병원 — URL 쿼리 hospitalId가 우선이고, 없으면 이 브라우저에서 마지막으로 고른 병원 */
+/* 처음 여는 병원 — URL에 hospitalId가 없으면 VISTA로 시작한다 */
+const DEFAULT_HOSPITAL_ID = 'vista';
+/* 고른 병원 — URL 쿼리 hospitalId가 우선이고, 없으면 기본 병원 */
 function currentHospitalId() {
   const ids = HOSPITAL_SEED.map(h => h.id), q = new URLSearchParams(location.search).get('hospitalId');
   if (ids.includes(q)) { const st = readStore(); if (st.selectedHospital !== q) writeStore({ ...st, selectedHospital: q }); return q; }
-  const saved = readStore().selectedHospital;
-  return ids.includes(saved) ? saved : ids[0];
+  return ids.includes(DEFAULT_HOSPITAL_ID) ? DEFAULT_HOSPITAL_ID : ids[0];
 }
 /* 병원을 바꾸면 같은 화면을 그 병원으로 다시 연다 — 화면마다 병원 데이터를 처음에 한 번 읽기 때문이다 */
 function switchHospital(id) {
