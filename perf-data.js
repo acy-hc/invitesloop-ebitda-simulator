@@ -107,35 +107,37 @@ const PERF_PROFILES = {
     events: true,
     users: { iface: '연동', upload: '김심사', manual: '이원무', admin: '홍길동' },
   },
-  cedar: {
-    items: [
-      ['ER_VISITS', '응급실 방문 건수', '건', 'SUM', 'WEEK', 'INTERFACE', 'HIS(응급)', '내원일', null, '2026-W01'],
-      ['ER_ADMITS', '응급실 경유 입원 건수', '건', 'SUM', 'MONTH', 'INTERFACE', 'HIS', '입원일', 'ER_VISITS', '202601'],
-      ['ER_REVENUE', '응급실 진료수익', 'AMOUNT', 'SUM', 'MONTH', 'MANUAL', '원무·회계', '진료일', null, null],
-    ],
-    kpis: [
-      kpiDef({ key: 'ER_VISITS', name: '응급실 방문 건수', category: 'REVENUE', unit: 'COUNT_PER_MONTH', decimals: 0, direction: 'UP', seed: false,
-        formula: { kind: 'EXPRESSION', expression: 'ER_VISITS / months' },
-        ebitda: { method: 'DELTA_X_BASE', scale: 'months', unitValue: 'ER_REVENUE / ER_VISITS', factor: 30, factorBasis: '응급 진료 공헌이익률 30% — 가정, 병원 재무 확인 필요' },
-        subMetrics: [{ name: '입원 전환율', expression: 'ER_ADMITS / ER_VISITS * 100', unit: '%', decimals: 1 }] }),
-    ],
-    templates: { MSPB: { ebitda: { factor: 25, factorBasis: 'BPCI Advanced 공유 절감 비율 25% — 예시' } }, CMS_INCENTIVE: {} },
+  /* Sharon — 163병상·LOS 4.6일·연 퇴원 8,000(v3.8 Sharon 프리셋), HRRP 페널티 0.55%. 나머지 계수는 시안 예시 */
+  sharon: {
+    templates: { CMS_INCENTIVE: {} },
     targets: {
-      BED_TURNOVER: target(4.6), READMISSION_30D: target(12.5), REMOTE_CARE: target(190000), CLAIM_DENIAL: target(6),
-      AR_DAYS: target(45), OUTPATIENT_VISITS: target(21800, { baselineTo: '202512' }), ER_VISITS: target(5450, { baselineTo: '202512' }),
-      MSPB: target(0.97), CMS_INCENTIVE: target(40000),
+      BED_TURNOVER: target(4.5), READMISSION_30D: target(12), REMOTE_CARE: target(110000), CLAIM_DENIAL: target(5.5),
+      AR_DAYS: target(48), OUTPATIENT_VISITS: target(8000, { baselineTo: '202512' }), CMS_INCENTIVE: target(20000),
     },
     gen: {
-      out: { weekly: 4780, growth: 0.04, newRatio: 0.12, dips: { '2025-W47': 0.88, '2025-W52': 0.72, '2026-W01': 0.85 }, revPerVisit: 238 },
-      beds: 410, turnover: [4.2, 0.35], los: [5.1, -0.4], revPerDischarge: 16800, readmit: [15.8, -2.6], readmitCost: 15200,
-      remote: { active: [800, 2600], arpu: 96, costRatio: 0.45 }, otherRevenue: 2400000, claimRatio: 0.92, denial: [9.5, -3.2], recovered: 0.02,
-      ar: [54, -8], over90: [0.18, -0.04], badDebt: [2.8, -0.6],
-      er: { weekly: 1178, growth: 0.05, admitRate: 0.16, revPerVisit: 1450 },
-      mspb: { episodes: 780, benchmark: 24800, ratio: [1.06, -0.08] },
-      cms: { hvbp: [38000, 40000], hrrp: [-52000, 30000], hacrp: [-21000, 8000], other: 6000 },
+      out: { weekly: 1700, growth: 0.05, newRatio: 0.14, dips: { '2025-W52': 0.75, '2026-W01': 0.85 }, revPerVisit: 180 },
+      beds: 163, turnover: [4.1, 0.3], los: [4.6, -0.4], revPerDischarge: 11000, readmit: [14.5, -2], readmitCost: 13500,
+      remote: { active: [600, 2000], arpu: 85, costRatio: 0.45 }, otherRevenue: 900000, claimRatio: 0.9, denial: [8, -2.5], recovered: 0.02,
+      ar: [58, -8], over90: [0.2, -0.04], badDebt: [3.2, -0.7],
+      cms: { hvbp: [12000, 2000], hrrp: [-11500, 8000], hacrp: [-6000, 3000], other: 2000 },
     },
-    missing: [['ER_REVENUE', 'MONTH', '202608']],
-    users: { iface: '연동', upload: 'K. Lee', manual: 'R. Patel', admin: 'J. Miller' },
+    users: { iface: '연동', upload: 'M. Santos', manual: 'A. Reyes', admin: 'K. Cruz' },
+  },
+  /* GRMC — 250병상·LOS 4.6일·연 퇴원 8,000(grmc-v3.8 기본 입력값), HRRP 페널티 0.55%. 나머지 계수는 시안 예시 */
+  grmc: {
+    templates: { CMS_INCENTIVE: {} },
+    targets: {
+      BED_TURNOVER: target(2.9), READMISSION_30D: target(12), REMOTE_CARE: target(40000), CLAIM_DENIAL: target(5.5),
+      AR_DAYS: target(48), OUTPATIENT_VISITS: target(2200, { baselineTo: '202512' }), CMS_INCENTIVE: target(30000),
+    },
+    gen: {
+      out: { weekly: 480, growth: 0.08, newRatio: 0.16, dips: { '2025-W52': 0.75, '2026-W01': 0.85 }, revPerVisit: 180 },
+      beds: 250, turnover: [2.65, 0.2], los: [4.6, -0.4], revPerDischarge: 16250, readmit: [14.5, -2], readmitCost: 13500,
+      remote: { active: [300, 800], arpu: 85, costRatio: 0.45 }, otherRevenue: 1200000, claimRatio: 0.9, denial: [8, -2.5], recovered: 0.02,
+      ar: [58, -8], over90: [0.2, -0.04], badDebt: [3.2, -0.7],
+      cms: { hvbp: [18000, 3000], hrrp: [-60000, 40000], hacrp: [-9000, 4000], other: 3000 },
+    },
+    users: { iface: '연동', upload: 'J. Santos', manual: 'L. Perez', admin: 'R. Taitano' },
   },
 };
 

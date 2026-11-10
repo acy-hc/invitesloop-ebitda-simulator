@@ -234,6 +234,61 @@ function customItem(key, name, segment, type, base, defs = {}) {
     fields: makeFields(key, type).map(f => ({ ...f, def: defs[f.key.split('.').pop()] ?? f.def })) };
 }
 
+/* 연도별 직접 입력 항목의 Y1~Y5 금액 → 시나리오 입력 key */
+const yearlyAmounts = (itemKey, amounts) => Object.fromEntries(amounts.map((v, i) => [`${itemKey}.amount.${i + 1}`, v]));
+/* 건당형 대상 비율의 입력 상한을 넓힌다 — 기본 상한 60%보다 큰 가정값이 있는 병원용 */
+const widenRatio = (it, max) => ({ ...it, fields: it.fields.map(f => (f.key.endsWith('.ratio') ? { ...f, max } : f)) });
+
+/* v3.8 레버 모델(Sharon·GRMC)을 시안 매출 항목으로 옮긴다.
+ * 원격케어 4경로는 건당형·구독형 항목, 단가 = 청구 단가 × 마진 × payer 가중(ACO 차감 포함).
+ * RCM·Self-Pay·원가 절감·VBC·물량 확대는 v3.8 tier별 연도 값을 연도별 직접 입력으로 넣는다.
+ * m1: M1 경로의 기반 인원 — Sharon 파일은 퇴원수, GRMC 파일은 외래 panel 기준이다. */
+const leverItems = m1 => [
+  widenRatio(customItem('awv', '원격케어 W · 연간 건강검진(AWV)', 'Medical', 'PER_CASE', 'OUT'), 100),
+  widenRatio(customItem('m1', m1.name, 'Medical', 'PER_CASE', m1.base), 100),
+  widenRatio(customItem('tcm', '원격케어 M2 · 전환기 관리(TCM)', 'Medical', 'PER_CASE', 'IN'), 100),
+  customItem('apcm', '원격케어 M3 · 상시 관리(APCM)', 'Medical', 'SUBSCRIPTION', 'OUT'),
+  customItem('rcm', 'RCM 실현율 개선 (B1)', 'Medical', 'MANUAL', 'IN'),
+  customItem('selfPay', 'Self-Pay 보험 전환 (B1)', 'Medical', 'MANUAL', 'IN'),
+  customItem('costSave', '병원 원가 절감 — LOS·재입원·Agency·Self-Pay (B2)', 'Medical', 'MANUAL', 'IN'),
+  customItem('vbc', 'VBC 성과 보상 — TM shared·MA HCC (B3)', 'Medical', 'MANUAL', 'IN'),
+  customItem('volume', '점유율 회복·Spoke 활성화 물량 (B0)', 'Medical', 'MANUAL', 'IN'),
+];
+/* 레버 모델 병원의 시나리오 입력 외 기본값 — Loop 운용비는 인건비·운영비율로만 둔다 */
+const LEVER_DEFAULTS = { mktgRate: 0, bizdevK: 0, omRate: 0, reservoir: false, churn0: 0, rpmAdopt: 0, rpmDelta: 0, hcAttr: false };
+
+/* Sharon — payer 가중 0.4135 = TM 35% + MA 11%×0.45 + Medicaid 28%×0.10 − ACO 차감 35%×20%×0.2 */
+const SHARON_TIERS = {
+  low: { awv: [25, 27.91], m1: [30, 74.43], tcm: [20, 42.8], apcm: [15, 242.49], opexRate: 3.6,
+    rcm: [936000, 1026000, 1102000, 1166000, 1192000], selfPay: [900000, 900000, 900000, 900000, 900000],
+    costSave: [2084000, 2147000, 2207000, 2259000, 2281000], vbc: [323000, 412000, 488000, 552000, 577000], volume: [0, 536000, 995000, 1378000, 1531000] },
+  base: { awv: [45, 37.22], m1: [50, 99.24], tcm: [40, 57.06], apcm: [30, 404.16], opexRate: 3.8,
+    rcm: [1404000, 1538000, 1653000, 1749000, 1788000], selfPay: [1200000, 1200000, 1200000, 1200000, 1200000],
+    costSave: [3409000, 3642000, 3860000, 4056000, 4137000], vbc: [812000, 1157000, 1452000, 1698000, 1796000], volume: [0, 1071000, 1990000, 2755000, 3061000] },
+  high: { awv: [65, 44.66], m1: [70, 119.09], tcm: [60, 68.48], apcm: [50, 581.98], opexRate: 3.3,
+    rcm: [2340000, 2564000, 2756000, 2916000, 2980000], selfPay: [1680000, 1680000, 1680000, 1680000, 1680000],
+    costSave: [6039000, 6714000, 7351000, 7923000, 8163000], vbc: [1923000, 2834000, 3615000, 4266000, 4526000], volume: [0, 1875000, 3482000, 4821000, 5357000] },
+};
+/* GRMC — grmc-v3.8.html 기본 입력값. payer 가중 = TM 35% + MA 10%×m + Medicaid 25%×0.10 − ACO 차감 35%×30%×sSav
+ * (보수 0.3845·기본 0.399·공격 0.40825). M1·TCM 포착률·등록률·순응도는 IRS+ 상향분을 더한 값, IRS+ 검사비는 운영비율에 넣는다 */
+const GRMC_TIERS = {
+  low: { awv: [25, 25.95], m1: [35, 69.21], tcm: [28, 39.8], apcm: [21, 244.28], opexRate: 10.4,
+    rcm: [650000, 650000, 650000, 650000, 650000], selfPay: [800000, 800000, 800000, 800000, 800000],
+    costSave: [1956000, 2059000, 2156000, 2245000, 2282000], vbc: [115000, 217000, 306000, 379000, 408000], volume: [0, 1130000, 2098000, 2905000, 3228000] },
+  base: { awv: [45, 35.91], m1: [55, 95.76], tcm: [48, 55.06], apcm: [36, 415.98], opexRate: 5.2,
+    rcm: [1300000, 1300000, 1300000, 1300000, 1300000], selfPay: [1600000, 1600000, 1600000, 1600000, 1600000],
+    costSave: [4448000, 4827000, 5191000, 5521000, 5660000], vbc: [468000, 928000, 1322000, 1651000, 1782000], volume: [0, 2259000, 4196000, 5810000, 6455000] },
+  high: { awv: [65, 44.09], m1: [75, 117.58], tcm: [68, 67.61], apcm: [56, 606.52], opexRate: 3,
+    rcm: [2340000, 2340000, 2340000, 2340000, 2340000], selfPay: [2800000, 2800000, 2800000, 2800000, 2800000],
+    costSave: [9295000, 10480000, 11614000, 12641000, 13073000], vbc: [1149000, 2377000, 3430000, 4307000, 4658000], volume: [0, 3954000, 7343000, 10167000, 11296000] },
+};
+const leverSet = t => ({
+  'awv.ratio': t.awv[0], 'awv.price': t.awv[1], 'm1.ratio': t.m1[0], 'm1.price': t.m1[1],
+  'tcm.ratio': t.tcm[0], 'tcm.price': t.tcm[1], 'apcm.conv': t.apcm[0], 'apcm.fee': t.apcm[1], opexRate: t.opexRate,
+  ...yearlyAmounts('rcm', t.rcm), ...yearlyAmounts('selfPay', t.selfPay), ...yearlyAmounts('costSave', t.costSave),
+  ...yearlyAmounts('vbc', t.vbc), ...yearlyAmounts('volume', t.volume),
+});
+
 /* ---------- 병원 ---------- */
 const HOSPITAL_SEED = [
   {
@@ -279,40 +334,71 @@ const HOSPITAL_SEED = [
       { label: 'Service Fee 요율', value: '25', unit: '%', basis: '계약 협상안 (미서명)', validFrom: '2026.01.01', scope: '병원' },
     ],
   },
-  /* 미국 예시 병원 — 외래·입원·응급실, 단일 거점, USD. 이름과 값은 시안용 예시다 */
+  /* 미국 펜실베이니아 지역 종합병원 — ebitda-v3.8 레버 모델 기준. 값은 v3.8 Sharon 프리셋 */
   {
-    id: 'cedar', name: 'Cedar Valley Medical Center', code: 'H-0002', country: '미국', currency: 'USD', report: 'USD',
-    fx: null, baseYear: 2025, locations: ['본원'], receivedAt: '2026.01.20',
-    sites: [{ key: 'main', name: '본원', chronic: 32, referral: 1 }],
+    id: 'sharon', name: 'Sharon Regional Medical Center', code: 'H-0002', country: '미국', currency: 'USD', report: 'USD',
+    fx: null, baseYear: 2025, locations: ['본원'], receivedAt: '2026.11.05',
+    sites: [{ key: 'main', name: '본원', chronic: 0, referral: 1 }],
     volumes: [
-      { key: 'OUT', count: 248600, from: '2025.01', to: '2025.12', months: 12 },
-      { key: 'IN', count: 21450, from: '2025.01', to: '2025.12', months: 12 },
-      { key: 'ER', count: 61280, from: '2025.01', to: '2025.12', months: 12 },
+      { key: 'OUT', count: 22000, from: '2025.01', to: '2025.12', months: 12, note: '외래 panel (활성 환자 수)' },
+      { key: 'IN', count: 8000, from: '2025.01', to: '2025.12', months: 12, note: '연간 퇴원수' },
     ],
-    revenueItems: [
-      fromTemplate('sub', { name: '만성질환 관리 구독 (Medical·Wellness)', base: 'OUT', fields: { convMed: { ramp: 12 }, convWell: { ramp: 4 }, appRate: { ramp: 85 }, feeMed: { ramp: 480 }, feeWell: { ramp: 180 } } }),
-      customItem('rpmBill', 'RPM 원격 모니터링 청구', 'Medical', 'PER_CASE', 'OUT', { ratio: 2.5, price: 1150 }),
-      customItem('erFollow', '응급실 퇴원 후속 진료 연계', 'Medical', 'REFERRAL_FEE', 'ER', { rate: 6, visits: 2, cost: 420, fee: 12 }),
-      customItem('tcm', '퇴원 후 전환기 관리(TCM)', 'Medical', 'PER_CASE', 'IN', { ratio: 18, price: 260 }),
-    ],
-    defaults: { convMed: 5, convWell: 1.5, appRate: 60, feeMed: 360, feeWell: 120, opexRate: 24, mktgRate: 30, bizdevK: 400, omRate: 5, reservoir: true, churn0: 22, rpmAdopt: 40, rpmDelta: 30, hcAttr: false },
-    reservoir: true,
+    revenueItems: leverItems({ name: '원격케어 M1 · 퇴원 직후 관리', base: 'IN' }),
+    defaults: { ...leverSet(SHARON_TIERS.base), ...LEVER_DEFAULTS },
+    reservoir: false,
     presets: [
-      { key: 'low', name: '보수', band: 'LOW', desc: '전환이 더디고 마케팅비가 높은 하한 가정', set: { convMed: 4, convWell: 1, appRate: 55, opexRate: 26, mktgRate: 34, bizdevK: 450, omRate: 6 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
-      { key: 'base', name: '기준', band: null, desc: '병원 재무팀과 맞춘 기준 가정', set: { convMed: 5, convWell: 1.5, appRate: 60, opexRate: 24, mktgRate: 30, bizdevK: 400, omRate: 5 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
-      { key: 'high', name: '공격', band: 'HIGH', desc: '앱 접점률과 RPM 확산이 빠른 상한 가정', set: { convMed: 8, convWell: 2.5, appRate: 75, opexRate: 22, mktgRate: 24, bizdevK: 350, omRate: 4, rpmAdopt: 55 }, updatedBy: 'J. Miller', updatedAt: '2026.10.06' },
+      { key: 'low', name: '보수', band: 'LOW', desc: 'v3.8 보수 tier · ACO — 등록률 15%, 마진 45%', set: leverSet(SHARON_TIERS.low), updatedBy: 'K. Cruz', updatedAt: '2026.11.05' },
+      { key: 'base', name: '기본', band: null, desc: 'v3.8 기본 tier · ACO — 등록률 30%, 마진 60%', set: leverSet(SHARON_TIERS.base), updatedBy: 'K. Cruz', updatedAt: '2026.11.05' },
+      { key: 'high', name: '공격', band: 'HIGH', desc: 'v3.8 공격 tier · ACO — 등록률 50%, 마진 72%', set: leverSet(SHARON_TIERS.high), updatedBy: 'K. Cruz', updatedAt: '2026.11.05' },
     ],
-    profile: { laborUnitCost: 96000, laborInflation: 3.5, laborInflationBasis: '병원 HR 2026 임금 인상안', staff: [6, 9, 12, 15, 18], royaltyRate: 8, taxRate: 21, taxLossYears: 0, depreciation: [120000, 120000, 180000, 180000, 180000], capex: [600000, 0, 300000, 0, 0], wacc: 10, growth: 2.5, nwcRate: 2, version: 1, updatedAt: '2026.10.06 09:40', updatedBy: 'J. Miller' },
+    profile: { laborUnitCost: 100000, laborInflation: 0, laborInflationBasis: 'v3.8 Loop 운용비 고정분 $2M/년 — 20명 × $100K로 표시', staff: [20, 20, 20, 20, 20], royaltyRate: 0, taxRate: 21, taxLossYears: 0, depreciation: [1600000, 1600000, 1600000, 1600000, 1600000], capex: [8000000, 0, 0, 0, 0], wacc: 10, growth: 2.5, nwcRate: 0, version: 1, updatedAt: '2026.11.05 10:00', updatedBy: 'K. Cruz' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
+    /* 증가율 = v3.8 Y1→Y5 연평균. panel 22K→56K(Spoke 활성화), 퇴원 8.0K→10.2K(점유율 62→75%). v3.8은 S-curve라 Y2~Y4는 이 값보다 크다 */
     params: [
-      { key: 'OUT', risk: null, growth: 2 },
-      { key: 'IN', risk: null, growth: 1.5 },
-      { key: 'ER', risk: null, growth: 3 },
+      { key: 'OUT', risk: null, growth: 26.3 },
+      { key: 'IN', risk: null, growth: 6.2 },
     ],
     assumptions: [
-      { label: 'RPM 청구 단가 (연)', value: '1150', unit: '', money: true, basis: 'CMS 2026 RPM 수가(CPT 99454·99457) 연 환산 — 예시', validFrom: '2026.01.01', scope: '병원' },
-      { label: 'RPM 이탈감소 효과 δ', value: '30', unit: '%', basis: '병원 원격관리 파일럿 2025', validFrom: '2026.01.01', scope: '병원' },
-      { label: 'TCM 청구 단가', value: '260', unit: '', money: true, basis: 'CPT 99495 평균 — 예시', validFrom: '2026.01.01', scope: '병원' },
+      { label: '원격케어 payer 가중', value: '0.4135', unit: '', basis: 'v3.8: TM 35% + MA 11%×0.45 + Medicaid 28%×0.10 − ACO 차감(35%×20%×0.2). Commercial은 0', validFrom: '2026.01.01', scope: '병원' },
+      { label: '에피소드 책임구조', value: 'ACO', unit: '', basis: 'v3.8 기본값(θ 1.00). FFS·TEAM·MA로 바꾸려면 VBC 금액을 다시 넣는다', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'Loop 귀속률 α', value: '0.35', unit: '', basis: 'v3.8 G15 — 파일럿 attribution 실측 전 가정', validFrom: '2026.01.01', scope: '병원' },
+      { label: '원가 절감·VBC·RCM 금액', value: 'v3.8', unit: '', basis: 'v3.8 tier별 연도 계산값을 연도별 직접 입력으로 고정 — payer mix·레버를 바꿔도 따라 움직이지 않음', validFrom: '2026.01.01', scope: '병원' },
+      { label: '병원 수치 출처', value: 'Sharon', unit: '', basis: 'ebitda-v3.8 Sharon 프리셋 — 병원 실적 원자료 대조 전', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'RHTP·SPC', value: '제외', unit: '', basis: 'v3.8 B4 RHTP(운영지원 연 $0.5M·capex 상계 $2M)와 SPC 투자 수익은 병원 EBITDA 밖이라 시안 범위에서 뺀다 — v3.8 원본에서 본다', validFrom: '2026.01.01', scope: '병원' },
+    ],
+  },
+  /* 괌 종합병원 — grmc-v3.8.html 레버 모델 기준. 값은 그 파일의 기본 입력값 */
+  {
+    id: 'grmc', name: 'Guam Regional Medical City', code: 'H-0003', country: '미국 (괌)', currency: 'USD', report: 'USD',
+    fx: null, baseYear: 2025, locations: ['본원'], receivedAt: '2026.11.05',
+    sites: [{ key: 'main', name: '본원', chronic: 0, referral: 1 }],
+    volumes: [
+      { key: 'OUT', count: 6000, from: '2025.01', to: '2025.12', months: 12, note: '외래 panel (활성 환자 수)' },
+      { key: 'IN', count: 8000, from: '2025.01', to: '2025.12', months: 12, note: '연간 퇴원수' },
+    ],
+    revenueItems: leverItems({ name: '원격케어 M1 · 외래 진입·triage', base: 'OUT' }),
+    defaults: { ...leverSet(GRMC_TIERS.base), ...LEVER_DEFAULTS },
+    reservoir: false,
+    presets: [
+      { key: 'low', name: '보수', band: 'LOW', desc: 'v3.8 보수 tier · ACO · IRS+ — 등록률 21%, 마진 45%', set: leverSet(GRMC_TIERS.low), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
+      { key: 'base', name: '기본', band: null, desc: 'v3.8 기본 tier · ACO · IRS+ — 등록률 36%, 마진 60%', set: leverSet(GRMC_TIERS.base), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
+      { key: 'high', name: '공격', band: 'HIGH', desc: 'v3.8 공격 tier · ACO · IRS+ — 등록률 56%, 마진 72%', set: leverSet(GRMC_TIERS.high), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
+    ],
+    profile: { laborUnitCost: 100000, laborInflation: 0, laborInflationBasis: 'v3.8 Loop 운용비 고정분 $2M/년 — 20명 × $100K로 표시', staff: [20, 20, 20, 20, 20], royaltyRate: 0, taxRate: 21, taxLossYears: 0, depreciation: [1600000, 1600000, 1600000, 1600000, 1600000], capex: [8000000, 0, 0, 0, 0], wacc: 10, growth: 2.5, nwcRate: 0, version: 1, updatedAt: '2026.11.05 10:00', updatedBy: 'R. Taitano' },
+    allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
+    /* 증가율 = v3.8 Y1→Y5 연평균. panel 6K→52K(목표 panel 50K), 퇴원 8.0K→12.6K(점유율 62→75% + panel 입원 전환). v3.8은 S-curve라 Y2~Y4는 이 값보다 크다 */
+    params: [
+      { key: 'OUT', risk: null, growth: 71.3 },
+      { key: 'IN', risk: null, growth: 12.05 },
+    ],
+    assumptions: [
+      { label: '원격케어 payer 가중 (기본)', value: '0.399', unit: '', basis: 'v3.8: TM 35% + MA 10%×0.45 + Medicaid 25%×0.10 − ACO 차감(35%×30%×0.20). Commercial은 0. 보수 0.3845·공격 0.40825', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'IRS+ M1 activation', value: 'ON', unit: '', basis: '퇴원 35% 대상·70% 활성화·1인 $180. 등록률 +6%p·순응도 +5%p·M1 +5%p·TCM +8%p를 포착률에 더했고 검사비는 운영비율에 넣었다', validFrom: '2026.01.01', scope: '병원' },
+      { label: '에피소드 책임구조', value: 'ACO', unit: '', basis: 'v3.8 기본값(θ×1.00). FFS·TEAM·MA로 바꾸려면 VBC 금액을 다시 넣는다', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'Loop 귀속률 α', value: '0.35', unit: '', basis: 'v3.8 G15 — 파일럿 attribution 실측 전 가정', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'RCM', value: 'Part A × 1%', unit: '', basis: 'gross charges가 0이라 Part A $130M × tier 요율(0.5/1.0/1.8%)로 계산한다', validFrom: '2026.01.01', scope: '병원' },
+      { label: '원가 절감·VBC·RCM 금액', value: 'v3.8', unit: '', basis: 'v3.8 tier별 연도 계산값을 연도별 직접 입력으로 고정 — payer mix·레버를 바꿔도 따라 움직이지 않음', validFrom: '2026.01.01', scope: '병원' },
+      { label: 'RHTP·SPC', value: '제외', unit: '', basis: 'v3.8 B4 RHTP(운영지원·capex 상계)는 병원 EBITDA 밖이라 시안 범위에서 뺀다', validFrom: '2026.01.01', scope: '병원' },
     ],
   },
 ];
@@ -325,10 +411,15 @@ const SCENARIO_SEED = {
     { id: 's4', name: '규제 대응', desc: '', preset: 'reg', version: 1, updatedAt: '2026-10-18 11:03' },
     { id: 's5', name: '요율 15% 협상안', desc: '', preset: 'feecut', version: 4, updatedAt: '2026-10-16 16:20' },
   ],
-  cedar: [
-    { id: 's1', name: '이사회 보고안', desc: '2027 예산 이사회 보고용', preset: 'base', version: 2, updatedAt: '2026-10-22 10:05' },
-    { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-10-15 16:40' },
-    { id: 's3', name: 'RPM 확산 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-10-15 16:52' },
+  sharon: [
+    { id: 's1', name: 'Loop 도입 기본안', desc: 'v3.8 기본 tier · ACO', preset: 'base', version: 1, updatedAt: '2026-11-05 10:00' },
+    { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-11-05 10:05' },
+    { id: 's3', name: '공격 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-11-05 10:10' },
+  ],
+  grmc: [
+    { id: 's1', name: 'Loop 도입 기본안', desc: 'v3.8 기본 tier · ACO · IRS+', preset: 'base', version: 1, updatedAt: '2026-11-05 10:00' },
+    { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-11-05 10:05' },
+    { id: 's3', name: '공격 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-11-05 10:10' },
   ],
 };
 
@@ -597,10 +688,9 @@ function mountShell({ active, title, footer, guide }) {
   const hid = currentHospitalId();
   const nav = [
     { key: 'simulator', label: '병원 EBITDA 시뮬레이터', icon: 'calculator', href: 'simulator.html' },
-    /* 병원경영 Dashboard 시안은 다시 만들 예정이라 메뉴에 두지 않는다. 화면 파일(performance.html)은 주소로 열 수 있다 */
-    { key: 'performance', label: '병원경영 Dashboard', icon: 'activity', href: 'performance.html', hidden: true },
+    { key: 'performance', label: '병원경영 Dashboard', icon: 'activity', href: 'performance.html' },
     { key: 'hospital-setting', label: '병원정보 설정', icon: 'settings-2', href: 'hospital-setting.html' },
-  ].filter(n => !n.hidden);
+  ];
   const navCls = 'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium';
   document.body.innerHTML = `
   <div class="min-h-screen bg-background">
