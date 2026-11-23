@@ -290,6 +290,8 @@ const leverSet = t => ({
 });
 
 /* ---------- 병원 ---------- */
+/* 거점별 실적 인원 — 병원 합계(count)는 거점 값의 합이다. 합계를 따로 적지 않으니 거점 값을 고치면 합계가 따라온다 */
+const siteVolume = (key, bySite, o = {}) => ({ key, count: Object.values(bySite).reduce((a, b) => a + b, 0), from: '2025.01', to: '2025.12', months: 12, ...o, bySite });
 const HOSPITAL_SEED = [
   {
     id: 'vista', name: 'VISTA 헬스케어', code: 'H-0001', country: '중국', currency: 'CNY', report: 'USD',
@@ -299,9 +301,8 @@ const HOSPITAL_SEED = [
       { key: 'bj', name: '북경', chronic: 16, referral: 0.215 },
     ],
     volumes: [
-      { key: 'OUT', count: 66689, from: '2025.01', to: '2025.12', months: 12, bySite: { sz: 21268, bj: 45421 } },
-      { key: 'IN', count: 3912, from: '2025.04', to: '2025.12', months: 9, note: '입원 시스템 2025.04 개통' },
-      { key: 'CHK', count: 12102, from: '2025.01', to: '2025.12', months: 12, bySite: { sz: 10156, bj: 1946 } },
+      siteVolume('OUT', { sz: 21268, bj: 45421 }),
+      siteVolume('CHK', { sz: 10156, bj: 1946 }),
     ],
     revenueItems: [
       fromTemplate('sub'),
@@ -323,7 +324,6 @@ const HOSPITAL_SEED = [
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
     params: [
       { key: 'OUT', risk: null, growth: 3 },
-      { key: 'IN', risk: null, growth: 2 },
       { key: 'CHK', risk: 46.2, growth: 3 },
     ],
     assumptions: [
@@ -403,6 +403,19 @@ const HOSPITAL_SEED = [
   },
 ];
 
+/* VISTA FY2025 확정 재집계 — 기존 VISTA 셋팅에서 실적 인원과 거점 만성질환 비율만 확정 수치로 바꾼 병원 (docs/hospital/VISTA_2025.md) */
+HOSPITAL_SEED.splice(1, 0, (() => {
+  const h = structuredClone(HOSPITAL_SEED[0]);
+  Object.assign(h, { id: 'vista2025', name: 'VISTA 헬스케어 (FY2025 확정)', code: 'H-0005', receivedAt: '2026.11.13' });
+  h.sites[0].chronic = 11.07;
+  h.sites[1].chronic = 10.57;
+  h.volumes = [
+    siteVolume('OUT', { sz: 26500, bj: 47511 }),
+    siteVolume('CHK', { sz: 8045, bj: 1752 }),
+  ];
+  return h;
+})());
+
 const SCENARIO_SEED = {
   vista: [
     { id: 's1', name: 'VISTA 투자자 제시안', desc: '투자자 미팅용 보수 시나리오', preset: 'kpmg', version: 3, updatedAt: '2026-10-24 14:30' },
@@ -410,6 +423,13 @@ const SCENARIO_SEED = {
     { id: 's3', name: '상단 시나리오', desc: '', preset: 'aggr', version: 1, updatedAt: '2026-10-20 17:45' },
     { id: 's4', name: '규제 대응', desc: '', preset: 'reg', version: 1, updatedAt: '2026-10-18 11:03' },
     { id: 's5', name: '요율 15% 협상안', desc: '', preset: 'feecut', version: 4, updatedAt: '2026-10-16 16:20' },
+  ],
+  vista2025: [
+    { id: 's1', name: 'VISTA 투자자 제시안', desc: 'FY2025 확정 수치 기준', preset: 'kpmg', version: 1, updatedAt: '2026-11-13 10:00' },
+    { id: 's2', name: 'BP 원안', desc: '', preset: 'base', version: 1, updatedAt: '2026-11-13 10:00' },
+    { id: 's3', name: '상단 시나리오', desc: '', preset: 'aggr', version: 1, updatedAt: '2026-11-13 10:00' },
+    { id: 's4', name: '규제 대응', desc: '', preset: 'reg', version: 1, updatedAt: '2026-11-13 10:00' },
+    { id: 's5', name: '요율 15% 협상안', desc: '', preset: 'feecut', version: 1, updatedAt: '2026-11-13 10:00' },
   ],
   sharon: [
     { id: 's1', name: 'Loop 도입 기본안', desc: 'v3.8 기본 tier · ACO', preset: 'base', version: 1, updatedAt: '2026-11-05 10:00' },

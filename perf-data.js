@@ -95,16 +95,17 @@ const target = (targetValue, o = {}) => ({ baselineFrom: '202501', baselineTo: '
 const PERF_PROFILES = {
   vista: {
     targets: {
-      BED_TURNOVER: target(3.4, { milestones: [{ period: '202512', value: 3.1 }] }), READMISSION_30D: target(10), REMOTE_CARE: target(53500),
+      BED_TURNOVER: target(0), READMISSION_30D: target(0), REMOTE_CARE: target(53500),
       CLAIM_DENIAL: target(1.5), AR_DAYS: target(55), OUTPATIENT_VISITS: target(5900, { baselineTo: '202512' }),
     },
     gen: {
       out: { weekly: 1246, growth: 0.075, newRatio: 0.18, dips: { '2025-W05': 0.68, '2026-W08': 0.68, '2025-W06': 0.86, '2026-W07': 0.86, '2026-W09': 0.86 }, revPerVisit: 91.5 },
-      beds: 260, turnover: [2.8, 0.45], los: [8.5, -0.9], revPerDischarge: 3100, readmit: [13.5, -1.9], readmitCost: 2540,
+      beds: 0, turnover: [0, 0], los: [0, 0], revPerDischarge: 0, readmit: [0, 0], readmitCost: 0, /* 입원 없음 */
       remote: { active: [1500, 1800], arpu: 23.5, costRatio: 0.4 }, otherRevenue: 126800, claimRatio: 0.7, denial: [3.0, -1.3], recovered: 0.006,
       ar: [75, -9], over90: [0.22, -0.05], badDebt: [1.2, -0.25],
     },
     events: true,
+    inpatient: false,  // 병상 데이터 없음 — 병상·입원·재입원 데이터 항목과 KPI를 보이지 않는다
     users: { iface: '연동', upload: '김심사', manual: '이원무', admin: '홍길동' },
   },
   /* Sharon — 163병상·LOS 4.6일·연 퇴원 8,000(v3.8 Sharon 프리셋), HRRP 페널티 0.55%. 나머지 계수는 시안 예시 */
@@ -168,7 +169,7 @@ function buildValueSeed(items, prof) {
   const lin = ([a, b], g) => a + b * g;
   months.forEach((m, i) => {
     const g = Math.min(Math.max((i - 2) / 18, 0), 1) ** 0.9;
-    const beds = Math.round(g0.beds + 3 * nz(i, 3));
+    const beds = g0.beds ? Math.round(g0.beds + 3 * nz(i, 3)) : 0;  // 병상이 없는 병원은 잡음도 더하지 않는다
     const dis = Math.round((lin(g0.turnover, g) + 0.04 * nz(i, 4)) * beds);
     put('STAFFED_BEDS', 'MONTH', m, beds);
     put('DISCHARGES', 'MONTH', m, dis);
@@ -249,25 +250,37 @@ function stampOf(period, cycle, day) {
   return `${k.slice(0, 4)}-${k.slice(4)}-${String(day).padStart(2, '0')} ${day < 5 ? '02:00' : '17:40'}`;
 }
 
+/* VISTA FY2025 확정 재집계 병원 — 성과 시드는 VISTA와 같다 */
+PERF_PROFILES.vista2025 = structuredClone(PERF_PROFILES.vista);
+
 /* ---------- 저장 ---------- */
 /* 저장본 형식 번호 — 형식이 다른 저장본은 버리고 예시값으로 다시 시작한다 */
 const PERF_VERSION = 3;
+/* 병상 데이터가 없는 병원(inpatient: false)에서 뺄 데이터 항목과 KPI */
+const INPATIENT_ITEM_KEYS = ['STAFFED_BEDS', 'ADMISSIONS', 'DISCHARGES', 'PATIENT_DAYS', 'INPATIENT_REVENUE', 'READMIT_30D', 'READMIT_COST'];
+const INPATIENT_KPI_KEYS = ['BED_TURNOVER', 'READMISSION_30D'];
 function perfSeed(hid) {
   const prof = PERF_PROFILES[hid];
-  const items = [...structuredClone(DATA_ITEM_SEED), ...(prof.items || []).map(dataItem).map(i => ({ ...i, seed: false }))];
-  const kpis = [...structuredClone(KPI_SEED), ...structuredClone(prof.kpis || [])];
+  const noBeds = prof.inpatient === false;
+  const allItems = [...structuredClone(DATA_ITEM_SEED), ...(prof.items || []).map(dataItem).map(i => ({ ...i, seed: false }))];
+  const items = allItems.filter(i => !(noBeds && INPATIENT_ITEM_KEYS.includes(i.key)));
+  const kpis = [...structuredClone(KPI_SEED), ...structuredClone(prof.kpis || [])].filter(k => !(noBeds && INPATIENT_KPI_KEYS.includes(k.key)));
   Object.entries(prof.templates || {}).forEach(([k, over]) => {
     const t = structuredClone(KPI_TEMPLATES.find(x => x.key === k));
     (TEMPLATE_ITEMS[k] || []).forEach(row => { if (!items.some(i => i.key === row[0])) items.push(templateItem(row)); });
     kpis.push({ ...t, ...over, ebitda: { ...t.ebitda, ...(over.ebitda || {}) }, seed: false, enabled: true });
   });
-  const { values, history } = buildValueSeed(items, prof);
+  /* 값 생성기는 모든 항목이 있다고 가정하므로 전체 항목으로 만든 뒤 뺀다. 템플릿 항목(items 뒤쪽)도 필요해 합친다 */
+  const seeded = buildValueSeed([...allItems, ...items.filter(i => !allItems.some(a => a.key === i.key))], prof);
+  /* 값 키는 `항목|주기|기간` — 뺀 항목의 값도 함께 뺀다 */
+  const keep = o => Object.fromEntries(Object.entries(o).filter(([k]) => !(noBeds && INPATIENT_ITEM_KEYS.includes(k.split('|')[0]))));
+  const values = keep(seeded.values), history = keep(seeded.history);
   const stamp = { updatedAt: '2025-04-10 14:20', updatedBy: prof.users.admin };
-  const targets = Object.fromEntries(Object.entries(prof.targets).map(([k, t]) => [k, { ...t, ...stamp }]));
+  const targets = Object.fromEntries(Object.entries(prof.targets).filter(([k]) => !(noBeds && INPATIENT_KPI_KEYS.includes(k))).map(([k, t]) => [k, { ...t, ...stamp }]));
   return {
     items, kpis, targets, values, history,
-    kpiHistory: hid === 'vista' ? { BED_TURNOVER: [{ changedAt: '2025-06-02 11:05', changedBy: prof.users.admin, changes: [{ field: '입원 공헌이익률', before: '30%', after: '35%' }] }] } : {},
-    targetHistory: hid === 'vista' ? { BED_TURNOVER: [{ ...prof.targets.BED_TURNOVER, milestones: [], ...stamp }] } : {},
+    kpiHistory: hid.startsWith('vista') && !noBeds ? { BED_TURNOVER: [{ changedAt: '2025-06-02 11:05', changedBy: prof.users.admin, changes: [{ field: '입원 공헌이익률', before: '30%', after: '35%' }] }] } : {},
+    targetHistory: hid.startsWith('vista') && !noBeds ? { BED_TURNOVER: [{ ...prof.targets.BED_TURNOVER, milestones: [], ...stamp }] } : {},
     version: PERF_VERSION,
   };
 }
