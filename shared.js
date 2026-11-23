@@ -294,7 +294,7 @@ const leverSet = t => ({
 const siteVolume = (key, bySite, o = {}) => ({ key, count: Object.values(bySite).reduce((a, b) => a + b, 0), from: '2025.01', to: '2025.12', months: 12, ...o, bySite });
 const HOSPITAL_SEED = [
   {
-    id: 'vista', name: 'VISTA 헬스케어', code: 'H-0001', country: '중국', currency: 'CNY', report: 'USD',
+    id: 'vista', name: 'VISTA', code: 'H-0001', country: '중국', currency: 'CNY', report: 'USD',
     fx: '1 USD = 7.10 CNY (2025 평균)', baseYear: 2025, locations: ['심천', '북경'], receivedAt: '2026.01.15',
     sites: [
       { key: 'sz', name: '심천', chronic: 8, referral: 1 },
@@ -309,16 +309,17 @@ const HOSPITAL_SEED = [
       fromTemplate('ref', { fields: { visits: { actual: 3.6 }, visitCost: { actual: 262 }, svcFee: { note: '미서명' } } }),
       fromTemplate('fam', { fields: { famSize: { note: '중국통계국' } } }),
       fromTemplate('corpRev', { model: { corpPool: 800000 } }),
-      fromTemplate('commRev'),
+      customItem('commSz', '커머스 · 심천', 'Commerce', 'MANUAL', 'SUBS', { amount: 0 }),
+      customItem('commBj', '커머스 · 북경', 'Commerce', 'MANUAL', 'SUBS', { amount: 0 }),
     ],
-    defaults: { convMed: 13, convWell: 4, refRate: 12, appRate: 95, feeMed: 120, feeWell: 80, visitCost: 250, visits: 4, svcFee: 25, famSize: 1.62, opexRate: 22, mktgRate: 38, bizdevK: 550, omRate: 5, reservoir: true, churn0: 25, rpmAdopt: 35, rpmDelta: 35, corp: true, corpPen: 0.4, p1: false, p2: false, coachFee: 8, hcAttr: false },
+    defaults: { convMed: 13, convWell: 4, refRate: 12, appRate: 95, feeMed: 120, feeWell: 80, visitCost: 250, visits: 4, svcFee: 25, famSize: 1.62, opexRate: 22, mktgRate: 38, bizdevK: 550, omRate: 5, reservoir: true, churn0: 25, rpmAdopt: 35, rpmDelta: 35, corp: true, corpPen: 0.4, hcAttr: false },
     reservoir: true,
     presets: [
-      { key: 'kpmg', name: 'KPMG정합', band: 'LOW', desc: 'KPMG Base(EV $15.8M)에 맞춘 보수 가정', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5, p1: false, p2: false }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
-      { key: 'base', name: 'BP기준', band: null, desc: 'BP 원안 — 마케팅비를 낮게 잡은 낙관 가정', set: { convMed: 20, convWell: 5, refRate: 20, svcFee: 25, opexRate: 20, mktgRate: 20, corpPen: 1.0, bizdevK: 519, omRate: 5, p1: false, p2: false }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
-      { key: 'aggr', name: '공격', band: 'HIGH', desc: '전환·침투를 높이고 커머스(P1·P2)를 켠 상단 가정', set: { convMed: 28, convWell: 7, refRate: 28, svcFee: 25, opexRate: 18, mktgRate: 15, corpPen: 1.4, bizdevK: 350, omRate: 3, p1: true, p2: true }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
-      { key: 'reg', name: '규제강화', band: null, desc: '처방 커머스 불가, 확산 둔화', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5, p1: false, p2: true }, updatedBy: '김분석', updatedAt: '2026.10.11' },
-      { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5, p1: false, p2: false }, updatedBy: '김분석', updatedAt: '2026.10.14' },
+      { key: 'kpmg', name: 'KPMG정합', band: 'LOW', desc: 'KPMG Base(EV $15.8M)에 맞춘 보수 가정', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
+      { key: 'base', name: 'BP기준', band: null, desc: 'BP 원안 — 마케팅비를 낮게 잡은 낙관 가정', set: { convMed: 20, convWell: 5, refRate: 20, svcFee: 25, opexRate: 20, mktgRate: 20, corpPen: 1.0, bizdevK: 519, omRate: 5 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
+      { key: 'aggr', name: '공격', band: 'HIGH', desc: '전환·침투를 높인 상단 가정', set: { convMed: 28, convWell: 7, refRate: 28, svcFee: 25, opexRate: 18, mktgRate: 15, corpPen: 1.4, bizdevK: 350, omRate: 3 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
+      { key: 'reg', name: '규제강화', band: null, desc: '확산 둔화 — 마케팅비 상향, 침투 배율 하향', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5 }, updatedBy: '김분석', updatedAt: '2026.10.11' },
+      { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5 }, updatedBy: '김분석', updatedAt: '2026.10.14' },
     ],
     profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
@@ -406,7 +407,7 @@ const HOSPITAL_SEED = [
 /* VISTA FY2025 확정 재집계 — 기존 VISTA 셋팅에서 실적 인원과 거점 만성질환 비율만 확정 수치로 바꾼 병원 (docs/hospital/VISTA_2025.md) */
 HOSPITAL_SEED.splice(1, 0, (() => {
   const h = structuredClone(HOSPITAL_SEED[0]);
-  Object.assign(h, { id: 'vista2025', name: 'VISTA 헬스케어 (FY2025 확정)', code: 'H-0005', receivedAt: '2026.11.13' });
+  Object.assign(h, { id: 'vista2025', name: 'VISTA (FY2025 확정)', code: 'H-0005', receivedAt: '2026.11.13' });
   h.sites[0].chronic = 11.07;
   h.sites[1].chronic = 10.57;
   h.volumes = [
@@ -454,6 +455,16 @@ function loadHospitals() {
     const c = structuredClone(h);
     if (s[h.id]?.presets) c.presets = s[h.id].presets;
     ['revenueItems', 'profile', 'params', 'sites', 'allocation', 'defaults'].forEach(k => { if (s[h.id]?.[k]) c[k] = s[h.id][k]; });
+    /* 저장본을 시드에 맞춘다 — 시드에서 빠진 항목(저장본에만 남은 템플릿 항목·구분)은 버리고, 새로 생긴 항목은 더한다.
+       그대로 두면 시드에 없는 템플릿 항목의 모델 값이 없어 계산이 NaN이 되고, 새 항목은 화면에 나오지 않는다. 사용자가 직접 추가한 항목(custom)은 둔다 */
+    if (s[h.id]?.revenueItems) {
+      const seedKeys = new Set(h.revenueItems.map(x => x.key));
+      c.revenueItems = [...c.revenueItems.filter(it => seedKeys.has(it.key) || it.custom), ...h.revenueItems.filter(x => !c.revenueItems.some(it => it.key === x.key))];
+    }
+    if (s[h.id]?.params) {
+      const paramKeys = new Set(h.params.map(x => x.key));
+      c.params = [...c.params.filter(p => paramKeys.has(p.key)), ...h.params.filter(x => !c.params.some(p => p.key === x.key))];
+    }
     c.revenueItems = c.revenueItems.map(it => {
       const seed = h.revenueItems.find(x => x.key === it.key);
       if (!seed?.template || it.template) return it;

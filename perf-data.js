@@ -255,7 +255,7 @@ PERF_PROFILES.vista2025 = structuredClone(PERF_PROFILES.vista);
 
 /* ---------- 저장 ---------- */
 /* 저장본 형식 번호 — 형식이 다른 저장본은 버리고 예시값으로 다시 시작한다 */
-const PERF_VERSION = 3;
+const PERF_VERSION = 4;
 /* 병상 데이터가 없는 병원(inpatient: false)에서 뺄 데이터 항목과 KPI */
 const INPATIENT_ITEM_KEYS = ['STAFFED_BEDS', 'ADMISSIONS', 'DISCHARGES', 'PATIENT_DAYS', 'INPATIENT_REVENUE', 'READMIT_30D', 'READMIT_COST'];
 const INPATIENT_KPI_KEYS = ['BED_TURNOVER', 'READMISSION_30D'];
