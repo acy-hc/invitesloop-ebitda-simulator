@@ -87,7 +87,7 @@ function mountHospitalBasic(root) {
     const h = hosp(), list = h.revenueItems;
     const rows = list.map((it, i) => `<tr class="border-b last:border-0 ${it.enabled ? '' : 'text-muted-foreground'}">
       <td class="td text-muted-foreground tabular-nums">${i + 1}</td>
-      <td class="td font-medium">${esc(it.name)}${it.template ? ' <span class="badge badge-secondary ms-1">표준 템플릿</span>' : ''}${it.custom ? ' <span class="badge badge-warning ms-1">추가</span>' : ''}</td>
+      <td class="td font-medium">${esc(it.name)}${it.template ? ' <span class="badge badge-secondary ms-1">표준 템플릿</span>' : ''}${it.custom ? ' <span class="badge badge-warning ms-1">추가</span>' : ''}${/^commP/.test(it.template) ? `<div class="mt-1 text-xs font-normal text-muted-foreground">${MODEL_FIELDS[it.template].map(f => `${f.label} ${it.model[f.key] ?? REVENUE_TEMPLATES[it.template].model[f.key]}${f.unit || ''}`).join(' · ')}</div>` : ''}</td>
       <td class="td">${segBadge(it.segment)}</td>
       <td class="td">${CALC_TYPES[it.type].label}</td>
       <td class="td">${BASE_LABEL[it.base] || '-'}</td>
@@ -166,8 +166,8 @@ function mountHospitalBasic(root) {
     const row = f => f.yearly
       ? `<div class="space-y-1.5 sm:col-span-2"><span class="label">${f.label} <span class="text-xs font-normal text-muted-foreground">${unit(f)} · Y1~Y5</span></span>
           <div class="grid grid-cols-5 gap-1.5">${it.model[f.key].map((v, i) => `<input class="input h-8 px-2 text-end text-xs tabular-nums" data-model="${f.key}.${i}" value="${+(v * 100).toFixed(2)}" aria-label="${f.label} Y${i + 1}"/>`).join('')}</div></div>`
-      : `<label class="block space-y-1.5"><span class="label">${f.label} <span class="text-xs font-normal text-muted-foreground">${unit(f)}${tpl[f.key] !== it.model[f.key] ? ` · 템플릿 ${tpl[f.key]}` : ''}</span></span>
-          <input class="input h-8 text-end tabular-nums" data-model="${f.key}" value="${it.model[f.key]}"/></label>`;
+      : `<label class="block space-y-1.5"><span class="label">${f.label} <span class="text-xs font-normal text-muted-foreground">${unit(f)}${tpl[f.key] !== (it.model[f.key] ?? tpl[f.key]) ? ` · 템플릿 ${tpl[f.key]}` : ''}</span></span>
+          <input class="input h-8 text-end tabular-nums" data-model="${f.key}" value="${it.model[f.key] ?? tpl[f.key]}"/></label>`;
     return `<fieldset class="space-y-3 rounded-lg border p-4"><legend class="label px-1">모델 값${tip('표준 템플릿 계산식에 들어가는 비율·단가입니다. 템플릿 기본값에서 시작하고, 이 병원에 맞게 바꿉니다.')}</legend>
       <div class="grid gap-3 sm:grid-cols-2">${defs.map(row).join('')}</div></fieldset>`;
   }

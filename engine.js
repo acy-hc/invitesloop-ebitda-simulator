@@ -17,10 +17,10 @@ const FORMULA_META = [
   ['subWell', 'Wellness 구독 매출', 'wellNew * feeWell', 'Wellness는 그해 신규만 반영한다.', 'wellNew: 신규 Wellness 구독자; feeWell: 연 구독료', '구독 매출·매출 합계'],
   ['corpReach', '기업병원 도달 인원', 'corpPool * penetration * multiplier', '기업병원을 켰을 때 연차별 침투율을 적용한다. 기본 침투율은 Y1~Y2가 0이다.', 'corpPool: 전체 대상 인원; penetration: 연차별 침투율; multiplier: 침투 배율', '기업병원 매출·커머스 직구매'],
   ['corpRev', '기업병원 매출', 'corpReach * attendRate * screenConv * screenPrice + atRisk * referRate * visits * visitCost * svcFee', '도달 인원의 검진 매출과 위험군 연계 매출의 합. 비율·단가는 기업병원 항목의 모델 값이다.', 'corpReach: 도달 인원; attendRate: 검진 수검률; screenConv: 검진 매출 전환율; screenPrice: 검진 단가; atRisk: 위험군 수(도달 × 임직원 위험군 비율); referRate: 위험군 외래 연계율; visits: 방문횟수; visitCost: 방문당 진료비; svcFee: 수수료율', '기업병원 매출·EBITDA'],
-  ['commMed', '커머스 의료경로 구매자', 'subscribers * buyRate', '커머스는 Y2부터 시작한다. 활성 구독자 기반.', 'subscribers: Medical 활성 + Wellness 신규; buyRate: 구독자 구매 전환율(커머스 모델 값)', 'P1·P2 구매자'],
+  ['commMed', '커머스 의료경로 구매자', 'subscribers * buyRate', '커머스는 Y2부터 시작한다. 활성 구독자 기반.', 'subscribers: Medical 활성 + Wellness 신규; buyRate: 구독자 구매 전환율(해당 커머스 항목의 모델 값)', 'P1·P2 구매자'],
   ['commCorp', '커머스 기업 직구매자', 'corpReach * commCorpPen', '기업병원 도달 인원의 직구매 전환. Y2부터 시작한다.', 'corpReach: 기업병원 도달 인원; commCorpPen: 직구매 침투율(소수)', 'P1·P2 구매자'],
-  ['p1', 'P1 Invites Pharma 매출', 'commBuyers * p1Price * p1Margin * p1Settle + commBuyers * coachFee * 12', 'P1을 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; p1Price·p1Margin·p1Settle: P1 객단가·마진·정산 비율(커머스 모델 값); coachFee: 월 코칭료', '커머스 매출·EBITDA'],
-  ['p2', 'P2 K-Commerce 매출', 'commBuyers * p2Price * p2Margin + commBuyers * coachFee * 12', 'P2를 켰을 때 제품 수수료와 코칭 매출의 합.', 'commBuyers: 두 경로 구매자 합계; p2Price·p2Margin: P2 객단가·마진(커머스 모델 값); coachFee: 월 코칭료', '커머스 매출·EBITDA'],
+  ['p1', 'P1 Invites Pharma 매출', 'commBuyers * p1Price * p1Margin * p1Settle + commBuyers * coachFee * 12', 'P1을 켰을 때 제품 수수료와 인당 구매비용 매출의 합.', 'commBuyers: 해당 상품의 두 경로 구매자 합계; p1Price·p1Margin·p1Settle: P1 객단가·마진·정산 비율(해당 커머스 항목의 모델 값); coachFee: 해당 상품의 월 인당 구매비용', '커머스 매출·EBITDA'],
+  ['p2', 'P2 K-Commerce 매출', 'commBuyers * p2Price * p2Margin * p2Settle + commBuyers * coachFee * 12', 'P2를 켰을 때 제품 수수료와 인당 구매비용 매출의 합.', 'commBuyers: 해당 상품의 두 경로 구매자 합계; p2Price·p2Margin·p2Settle: P2 객단가·마진·정산 비율(해당 커머스 항목의 모델 값); coachFee: 해당 상품의 월 인당 구매비용', '커머스 매출·EBITDA'],
   ['itemSubscription', '구독형 매출 항목', 'base * conv * fee', '추가한 구독형 매출 항목. 기반 인원 중 전환한 사람에 구독료를 곱한다.', 'base: 기반 인원; conv: 전환율(소수); fee: 구독료', '추가한 매출 항목'],
   ['itemReferral', '연계 수수료형 매출 항목', 'base * rate * visits * cost * fee', '추가한 연계 수수료형 매출 항목.', 'base: 기반 인원; rate: 연계율(소수); visits: 방문횟수; cost: 진료비; fee: 수수료율(소수)', '추가한 매출 항목'],
   ['itemPerCase', '건당형 매출 항목', 'base * ratio * price', '추가한 건당형 매출 항목.', 'base: 기반 인원; ratio: 대상 비율(소수); price: 건당 단가', '추가한 매출 항목'],
@@ -186,7 +186,7 @@ function runModel(h, d, formulas = {}) {
 
   const corpOn = enabled.corpRev && val('corp');
   /* 템플릿 항목의 모델 값 — 비율은 % 단위로 저장한다 (D16-d) */
-  const cm = item('corpRev')?.model || {}, km = item('commRev')?.model || {};
+  const cm = item('corpRev')?.model || {}, k1 = item('commP1')?.model || {}, k2 = item('commP2')?.model || {};
   const lossYears = p.taxLossYears || 0, losses = [];
   let prevRev = 0;
   return {
@@ -206,20 +206,22 @@ function runModel(h, d, formulas = {}) {
         corpReach = f('corpReach', { corpPool: cm.corpPool, penetration: cm.corpPenBase[y], multiplier: val('corpPen') });
         corpRev = f('corpRev', { corpReach, attendRate: cm.attendRate / 100, screenConv: cm.screenConv / 100, screenPrice: cm.screenPrice, atRisk: corpReach * cm.atRiskRate / 100, referRate: cm.referRate / 100, visits, visitCost: rampIf('visitCost', y, label + ' 기업병원'), svcFee });
       }
-      /* 커머스는 Y2부터 — Y1은 진료 서비스 준비에 집중한다 */
-      let commRev = 0, commBuyers = 0;
-      if (enabled.commRev && y >= 1) {
-        commBuyers = f('commMed', { subscribers, buyRate: km.buyRate / 100 }) + f('commCorp', { corpReach, commCorpPen: km.commCorpPen / 100 });
-        if (val('p1')) commRev += f('p1', { commBuyers, p1Price: km.p1Price, p1Margin: km.p1Margin / 100, p1Settle: km.p1Settle / 100, coachFee: val('coachFee') });
-        if (val('p2')) commRev += f('p2', { commBuyers, p2Price: km.p2Price, p2Margin: km.p2Margin / 100, coachFee: val('coachFee') });
-      }
+      /* 커머스는 Y2부터 — Y1은 진료 서비스 준비에 집중한다. P1·P2는 구매자·마진을 각자 가진다 */
+      let commBuyers = 0;
+      const commItem = (key, tog, km, pk, feeKey, tag) => {
+        if (!enabled[key] || y < 1 || !val(tog)) return 0;
+        const buyers = f('commMed', { subscribers, buyRate: km.buyRate / 100 }, tag) + f('commCorp', { corpReach, commCorpPen: km.commCorpPen / 100 }, tag);
+        commBuyers = Math.max(commBuyers, buyers);
+        return f(pk, { commBuyers: buyers, [`${pk}Price`]: km[`${pk}Price`], [`${pk}Margin`]: km[`${pk}Margin`] / 100, [`${pk}Settle`]: (km[`${pk}Settle`] ?? 100) / 100, coachFee: val(feeKey) }, tag);
+      };
+      const commP1 = commItem('commP1', 'p1', k1, 'p1', 'p1Fee', ' P1'), commP2 = commItem('commP2', 'p2', k2, 'p2', 'p2Fee', ' P2');
 
       const rev = {
         sub: enabled.sub ? f('subMed', { medActive, feeMed }) + f('subWell', { wellNew, feeWell }) : 0,
         ref: enabled.ref ? sites.reduce((a, s) => a + s.refRev, 0) : 0,
         fam: enabled.fam ? sites.reduce((a, s) => a + s.famRev, 0) : 0,
         corpRev: enabled.corpRev ? corpRev : 0,
-        commRev,
+        commP1, commP2,
       };
       /* 병원 기초정보에서 추가한 매출 항목 — 산출 방식에 따라 계산한다 */
       const base = {

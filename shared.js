@@ -186,14 +186,20 @@ const REVENUE_TEMPLATES = {
       { key: 'corpPen', def: 0.4, label: '기업병원 침투 배율', unit: '×', min: 0.2, max: 2, step: 0.1, help: '기업병원 기본 침투율 곡선(모델 값)에 곱하는 배율입니다. 1.0이면 기본 곡선 그대로입니다.' },
     ],
     model: { corpPool: 0, corpPenBase: [0, 0, 0.1, 0.2, 0.3], attendRate: 95, screenConv: 10, screenPrice: 180, atRiskRate: 46, referRate: 20 } },
-  commRev: { name: '커머스 (P1·P2)', segment: 'Commerce', type: 'PER_CASE', base: 'SUBS',
-    desc: '구독자와 기업병원 임직원이 사는 의약품(P1)·건강 소비재(P2) 커머스 매출입니다. Y2부터 생깁니다.',
+  commP1: { name: '커머스 · P1 Invites Pharma', segment: 'Commerce', type: 'PER_CASE', base: 'SUBS', toggle: 'p1',
+    toggleHelp: '처방 연계 의약품 커머스(Invites Pharma)를 켭니다. 매출은 Y2부터 생깁니다.',
+    desc: '구독자와 기업병원 임직원이 사는 처방 연계 의약품 커머스 매출입니다. Y2부터 생깁니다.',
     fields: [
-      { key: 'p1', def: false, label: 'P1 Invites Pharma', toggle: true, help: '처방 연계 의약품 커머스(Invites Pharma)를 켭니다. 커머스 매출은 Y2부터 생깁니다.' },
-      { key: 'p2', def: false, label: 'P2 K-Commerce', toggle: true, help: '화장품·건강식품 커머스(K-Commerce)를 켭니다. 커머스 매출은 Y2부터 생깁니다.' },
-      { key: 'coachFee', def: 8, label: 'JITAI 코칭료', unit: '/월', min: 0, max: 30, step: 1, money: true, whenAny: ['p1', 'p2'], help: 'JITAI 맞춤 코칭을 쓰는 구매자의 월 이용료입니다.' },
+      { key: 'p1Fee', def: 8, label: 'P1 인당 구매비용', unit: '/월', min: 0, max: 30, step: 1, money: true, help: 'P1 구매자 1명이 내는 월 구매비용입니다. 연 매출은 구매자 × 월 구매비용 × 12입니다.' },
     ],
-    model: { commCorpPen: 25, buyRate: 40, p1Price: 120, p1Margin: 15, p1Settle: 75, p2Price: 200, p2Margin: 20 } },
+    model: { buyRate: 40, commCorpPen: 25, p1Price: 120, p1Margin: 15, p1Settle: 75 } },
+  commP2: { name: '커머스 · P2 K-Commerce', segment: 'Commerce', type: 'PER_CASE', base: 'SUBS', toggle: 'p2',
+    toggleHelp: '화장품·건강식품 커머스(K-Commerce)를 켭니다. 매출은 Y2부터 생깁니다.',
+    desc: '구독자와 기업병원 임직원이 사는 화장품·건강식품 커머스 매출입니다. Y2부터 생깁니다.',
+    fields: [
+      { key: 'p2Fee', def: 8, label: 'P2 인당 구매비용', unit: '/월', min: 0, max: 30, step: 1, money: true, help: 'P2 구매자 1명이 내는 월 구매비용입니다. 연 매출은 구매자 × 월 구매비용 × 12입니다.' },
+    ],
+    model: { buyRate: 40, commCorpPen: 25, p2Price: 200, p2Margin: 20, p2Settle: 100 } },
 };
 /* 템플릿 모델 값의 이름·단위 — 매출 항목 편집 모달의 "모델 값" 영역 */
 const MODEL_FIELDS = {
@@ -206,14 +212,19 @@ const MODEL_FIELDS = {
     { key: 'atRiskRate', label: '임직원 위험군 비율', unit: '%' },
     { key: 'referRate', label: '위험군 외래 연계율', unit: '%' },
   ],
-  commRev: [
-    { key: 'commCorpPen', label: '기업 임직원 직구매 침투율', unit: '%' },
+  commP1: [
     { key: 'buyRate', label: '구독자 구매 전환율', unit: '%' },
-    { key: 'p1Price', label: 'P1 객단가', money: true },
-    { key: 'p1Margin', label: 'P1 마진', unit: '%' },
-    { key: 'p1Settle', label: 'P1 정산 비율', unit: '%' },
-    { key: 'p2Price', label: 'P2 객단가', money: true },
-    { key: 'p2Margin', label: 'P2 마진', unit: '%' },
+    { key: 'commCorpPen', label: '기업 임직원 직구매 침투율', unit: '%' },
+    { key: 'p1Price', label: '객단가', money: true },
+    { key: 'p1Margin', label: '마진율', unit: '%' },
+    { key: 'p1Settle', label: '정산 비율', unit: '%' },
+  ],
+  commP2: [
+    { key: 'buyRate', label: '구독자 구매 전환율', unit: '%' },
+    { key: 'commCorpPen', label: '기업 임직원 직구매 침투율', unit: '%' },
+    { key: 'p2Price', label: '객단가', money: true },
+    { key: 'p2Margin', label: '마진율', unit: '%' },
+    { key: 'p2Settle', label: '정산 비율', unit: '%' },
   ],
 };
 /* 템플릿으로 병원 매출 항목을 만든다. over: { name, base, enabled, fields: { key: 덮을 속성 }, model: { key: 값 } } */
@@ -292,6 +303,8 @@ const leverSet = t => ({
 /* ---------- 병원 ---------- */
 /* 거점별 실적 인원 — 병원 합계(count)는 거점 값의 합이다. 합계를 따로 적지 않으니 거점 값을 고치면 합계가 따라온다 */
 const siteVolume = (key, bySite, o = {}) => ({ key, count: Object.values(bySite).reduce((a, b) => a + b, 0), from: '2025.01', to: '2025.12', months: 12, ...o, bySite });
+/* 시드에서 빠진 병원 고유 항목 — 옛 저장본에 남아 있어도 읽을 때 걸러낸다 */
+const RETIRED_ITEM_KEYS = ['commSz', 'commBj'];
 const HOSPITAL_SEED = [
   {
     id: 'vista', name: 'VISTA', code: 'H-0001', country: '중국', currency: 'CNY', report: 'USD',
@@ -309,16 +322,16 @@ const HOSPITAL_SEED = [
       fromTemplate('ref', { fields: { visits: { actual: 3.6 }, visitCost: { actual: 262 }, svcFee: { note: '미서명' } } }),
       fromTemplate('fam', { fields: { famSize: { note: '중국통계국' } } }),
       fromTemplate('corpRev', { model: { corpPool: 800000 } }),
-      customItem('commSz', '커머스 · 심천', 'Commerce', 'MANUAL', 'SUBS', { amount: 0 }),
-      customItem('commBj', '커머스 · 북경', 'Commerce', 'MANUAL', 'SUBS', { amount: 0 }),
+      fromTemplate('commP1'),
+      fromTemplate('commP2'),
     ],
-    defaults: { convMed: 13, convWell: 4, refRate: 12, appRate: 95, feeMed: 120, feeWell: 80, visitCost: 250, visits: 4, svcFee: 25, famSize: 1.62, opexRate: 22, mktgRate: 38, bizdevK: 550, omRate: 5, reservoir: true, churn0: 25, rpmAdopt: 35, rpmDelta: 35, corp: true, corpPen: 0.4, hcAttr: false },
+    defaults: { convMed: 13, convWell: 4, refRate: 12, appRate: 95, feeMed: 120, feeWell: 80, visitCost: 250, visits: 4, svcFee: 25, famSize: 1.62, opexRate: 22, mktgRate: 38, bizdevK: 550, omRate: 5, reservoir: true, churn0: 25, rpmAdopt: 35, rpmDelta: 35, corp: true, corpPen: 0.4, p1: false, p2: false, p1Fee: 8, p2Fee: 8, hcAttr: false },
     reservoir: true,
     presets: [
       { key: 'kpmg', name: 'KPMG정합', band: 'LOW', desc: 'KPMG Base(EV $15.8M)에 맞춘 보수 가정', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
       { key: 'base', name: 'BP기준', band: null, desc: 'BP 원안 — 마케팅비를 낮게 잡은 낙관 가정', set: { convMed: 20, convWell: 5, refRate: 20, svcFee: 25, opexRate: 20, mktgRate: 20, corpPen: 1.0, bizdevK: 519, omRate: 5 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
-      { key: 'aggr', name: '공격', band: 'HIGH', desc: '전환·침투를 높인 상단 가정', set: { convMed: 28, convWell: 7, refRate: 28, svcFee: 25, opexRate: 18, mktgRate: 15, corpPen: 1.4, bizdevK: 350, omRate: 3 }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
-      { key: 'reg', name: '규제강화', band: null, desc: '확산 둔화 — 마케팅비 상향, 침투 배율 하향', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5 }, updatedBy: '김분석', updatedAt: '2026.10.11' },
+      { key: 'aggr', name: '공격', band: 'HIGH', desc: '전환·침투를 높이고 P1·P2 커머스를 켠 상단 가정', set: { convMed: 28, convWell: 7, refRate: 28, svcFee: 25, opexRate: 18, mktgRate: 15, corpPen: 1.4, bizdevK: 350, omRate: 3, p1: true, p2: true }, updatedBy: '홍길동', updatedAt: '2026.10.02' },
+      { key: 'reg', name: '규제강화', band: null, desc: '확산 둔화 — 마케팅비 상향, 침투 배율 하향, 처방 커머스(P1) 불가·P2만 가동', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 25, opexRate: 22, mktgRate: 40, corpPen: 0.3, bizdevK: 550, omRate: 5, p1: false, p2: true }, updatedBy: '김분석', updatedAt: '2026.10.11' },
       { key: 'feecut', name: '요율인하', band: null, desc: 'Service Fee 요율 25% → 15% 요구 반영', set: { convMed: 13, convWell: 4, refRate: 12, svcFee: 15, opexRate: 22, mktgRate: 38, corpPen: 0.4, bizdevK: 550, omRate: 5 }, updatedBy: '김분석', updatedAt: '2026.10.14' },
     ],
     profile: { laborUnitCost: 28124, laborInflation: 0, laborInflationBasis: 'KPMG 실사 기준 — 상승률 미반영', staff: [5, 6, 15, 17, 20], royaltyRate: 10, taxRate: 15, taxLossYears: 0, depreciation: [210000, 210000, 330000, 330000, 330000], capex: [1050000, 0, 600000, 0, 0], wacc: 20, growth: 3, nwcRate: 0, version: 4, updatedAt: '2026.10.20 15:02', updatedBy: '홍길동' },
@@ -459,7 +472,7 @@ function loadHospitals() {
        그대로 두면 시드에 없는 템플릿 항목의 모델 값이 없어 계산이 NaN이 되고, 새 항목은 화면에 나오지 않는다. 사용자가 직접 추가한 항목(custom)은 둔다 */
     if (s[h.id]?.revenueItems) {
       const seedKeys = new Set(h.revenueItems.map(x => x.key));
-      c.revenueItems = [...c.revenueItems.filter(it => seedKeys.has(it.key) || it.custom), ...h.revenueItems.filter(x => !c.revenueItems.some(it => it.key === x.key))];
+      c.revenueItems = [...c.revenueItems.filter(it => seedKeys.has(it.key) || (it.custom && !RETIRED_ITEM_KEYS.includes(it.key))), ...h.revenueItems.filter(x => !c.revenueItems.some(it => it.key === x.key))];
     }
     if (s[h.id]?.params) {
       const paramKeys = new Set(h.params.map(x => x.key));

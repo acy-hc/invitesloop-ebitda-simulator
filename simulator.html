@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>병원 EBITDA 시뮬레이터 시안</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
-<script src="shared.js?v=20261123b"></script>
-<script src="engine.js?v=20261123b"></script>
-<script src="guide.js?v=20261123b"></script>
+<script src="shared.js?v=20261125f"></script>
+<script src="engine.js?v=20261125f"></script>
+<script src="guide.js?v=20261125f"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 </head>
@@ -270,12 +270,18 @@ function renderResults() {
   const plChart = chart({ mode: 'group', selected: state.year, baseYear: h.baseYear,
     bars: [{ name: '매출', values: revS, color: 'var(--chart-3)' }, { name: '영업비용', values: costS, color: 'var(--chart-5)', opacity: 0.6 }],
     lines: [{ name: ebitdaLabel, values: ebS, color: 'var(--chart-1)', labels: true }] });
+  /* ROI = 세후이익 ÷ 누적 CAPEX (그 연도까지 쓴 투자). 누적 ROI는 누적 세후이익 기준. CAPEX가 0이면 0 */
+  let capexCum = 0, nopatCum = 0;
+  const roiPairs = years.map((yy, i) => { capexCum += h.profile.capex[i] || 0; nopatCum += yy.nopat; return [capexCum ? yy.nopat / capexCum : 0, capexCum ? nopatCum / capexCum : 0]; });
+  const roiYear = roiPairs.map(r => r[0]), roiCum = roiPairs.map(r => r[1]);
   const plTable = yearTable({ selected: state.year, baseYear: h.baseYear, rows: [
     { label: '매출', values: revS, swatch: 'var(--chart-3)' },
     { label: '영업비용', values: costS, swatch: 'var(--chart-5)', opacity: 0.6 },
     { label: ebitdaLabel, values: ebS, kind: 'key', swatch: 'var(--chart-1)' },
     { label: 'EBITDA 마진', values: years.map(yy => yy.revTotal ? yy.ebitda / yy.revTotal : 0), kind: 'pct' },
     { label: '세후이익', values: series('nopat'), kind: 'total' },
+    { label: '연 ROI', values: roiYear, kind: 'pct' },
+    { label: '누적 ROI', values: roiCum, kind: 'pct' },
   ] });
 
   /* 매출 항목별 */
@@ -332,7 +338,7 @@ function renderResults() {
     ${card(esc(scen().name), `${h.baseYear} 실적 기반 5개년 · 선택 연도 Y${state.year} (${h.baseYear + state.year})`, `
       <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         ${kpi('매출', revS, F.short, null, 'var(--chart-3)')}
-        ${kpi(ebitdaLabel, ebS, F.short, `마진 ${y.revTotal ? F.pct(y.ebitda / y.revTotal) : '-'}`, 'var(--chart-1)', true)}
+        ${kpi(ebitdaLabel, ebS, F.short, `마진 ${y.revTotal ? F.pct(y.ebitda / y.revTotal) : '-'} · ROI ${F.pct(roiYear[state.year - 1])}`, 'var(--chart-1)', true)}
         ${kpi('세후이익', series('nopat'), F.short, null, 'var(--chart-2)')}
         ${kpi('활성 구독자', series('subscribers'), v => F.int(v) + '명', null, 'var(--chart-4)')}
       </div>
