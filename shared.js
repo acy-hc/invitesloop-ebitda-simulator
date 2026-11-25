@@ -301,6 +301,17 @@ const leverSet = t => ({
 });
 
 /* ---------- 병원 ---------- */
+const GRMC_VBC = {
+  low: { ffs: [74000, 168000, 249000, 317000, 344000], aco: [115000, 217000, 306000, 379000, 408000], team: [102000, 203000, 289000, 360000, 389000], ma: [90000, 188000, 272000, 342000, 370000] },
+  base: { ffs: [308000, 736000, 1103000, 1408000, 1530000], aco: [468000, 928000, 1322000, 1651000, 1782000], team: [420000, 871000, 1256000, 1578000, 1707000], ma: [372000, 813000, 1190000, 1505000, 1631000] },
+  high: { ffs: [777000, 1930000, 2919000, 3742000, 4072000], aco: [1149000, 2377000, 3430000, 4307000, 4658000], team: [1037000, 2243000, 3276000, 4138000, 4482000], ma: [926000, 2109000, 3123000, 3968000, 4306000] },
+};
+/* GRMC 프리셋 = 보수·기본·공격 tier × 에피소드 책임구조 4종. 책임구조는 VBC 금액만 바꾼다 (v3.8: TM shared savings × θ 배수 — 순수 FFS 0.10(APCM 게이트로 0.5 하한)·ACO 1.00·TEAM 0.85·MA 0.70) */
+const GRMC_TIER_META = [['low', '보수', 'LOW', '등록률 21%, 마진 45%'], ['base', '기본', null, '등록률 36%, 마진 60%'], ['high', '공격', 'HIGH', '등록률 56%, 마진 72%']];
+const GRMC_REGIMES = [['ffs', '순수 FFS', '에피소드 책임 없음 — VBC θ 0.5 하한'], ['aco', 'ACO', 'TM shared savings 완전 회수 — θ×1.00'], ['team', 'TEAM 의무', 'Part A 30일 에피소드 책임 — θ×0.85'], ['ma', 'MA 위험분담', 'capitation 중심 — θ×0.70']];
+const GRMC_PRESETS = GRMC_TIER_META.flatMap(([t, tn, band, tdesc]) => GRMC_REGIMES.map(([r, rn, rdesc]) => ({
+  key: `${t}_${r}`, name: `${tn} · ${rn}`, band: r === 'aco' ? band : null, desc: `v3.8 ${tn} tier · ${rn} · IRS+ — ${tdesc}. ${rdesc}`,
+  set: { ...leverSet(GRMC_TIERS[t]), ...yearlyAmounts('vbc', GRMC_VBC[t][r]) }, updatedBy: 'R. Taitano', updatedAt: '2026.11.05' })));
 /* 거점별 실적 인원 — 병원 합계(count)는 거점 값의 합이다. 합계를 따로 적지 않으니 거점 값을 고치면 합계가 따라온다 */
 const siteVolume = (key, bySite, o = {}) => ({ key, count: Object.values(bySite).reduce((a, b) => a + b, 0), from: '2025.01', to: '2025.12', months: 12, ...o, bySite });
 /* 시드에서 빠진 병원 고유 항목 — 옛 저장본에 남아 있어도 읽을 때 걸러낸다 */
@@ -393,11 +404,7 @@ const HOSPITAL_SEED = [
     revenueItems: leverItems({ name: '원격케어 M1 · 외래 진입·triage', base: 'OUT' }),
     defaults: { ...leverSet(GRMC_TIERS.base), ...LEVER_DEFAULTS },
     reservoir: false,
-    presets: [
-      { key: 'low', name: '보수', band: 'LOW', desc: 'v3.8 보수 tier · ACO · IRS+ — 등록률 21%, 마진 45%', set: leverSet(GRMC_TIERS.low), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
-      { key: 'base', name: '기본', band: null, desc: 'v3.8 기본 tier · ACO · IRS+ — 등록률 36%, 마진 60%', set: leverSet(GRMC_TIERS.base), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
-      { key: 'high', name: '공격', band: 'HIGH', desc: 'v3.8 공격 tier · ACO · IRS+ — 등록률 56%, 마진 72%', set: leverSet(GRMC_TIERS.high), updatedBy: 'R. Taitano', updatedAt: '2026.11.05' },
-    ],
+    presets: GRMC_PRESETS,
     profile: { laborUnitCost: 100000, laborInflation: 0, laborInflationBasis: 'v3.8 Loop 운용비 고정분 $2M/년 — 20명 × $100K로 표시', staff: [20, 20, 20, 20, 20], royaltyRate: 0, taxRate: 21, taxLossYears: 0, depreciation: [1600000, 1600000, 1600000, 1600000, 1600000], capex: [8000000, 0, 0, 0, 0], wacc: 10, growth: 2.5, nwcRate: 0, version: 1, updatedAt: '2026.11.05 10:00', updatedBy: 'R. Taitano' },
     allocation: { labor: 'REVENUE_SHARE', opex: 'SEGMENT_REVENUE', mktg: 'MEDICAL_ONLY', bizdev: 'REVENUE_SHARE', royalty: 'SEGMENT_REVENUE', om: 'SEGMENT_REVENUE', capexAttr: 'REVENUE_SHARE', dep: 'REVENUE_SHARE' },
     /* 증가율 = v3.8 Y1→Y5 연평균. panel 6K→52K(목표 panel 50K), 퇴원 8.0K→12.6K(점유율 62→75% + panel 입원 전환). v3.8은 S-curve라 Y2~Y4는 이 값보다 크다 */
@@ -408,7 +415,7 @@ const HOSPITAL_SEED = [
     assumptions: [
       { label: '원격케어 payer 가중 (기본)', value: '0.399', unit: '', basis: 'v3.8: TM 35% + MA 10%×0.45 + Medicaid 25%×0.10 − ACO 차감(35%×30%×0.20). Commercial은 0. 보수 0.3845·공격 0.40825', validFrom: '2026.01.01', scope: '병원' },
       { label: 'IRS+ M1 activation', value: 'ON', unit: '', basis: '퇴원 35% 대상·70% 활성화·1인 $180. 등록률 +6%p·순응도 +5%p·M1 +5%p·TCM +8%p를 포착률에 더했고 검사비는 운영비율에 넣었다', validFrom: '2026.01.01', scope: '병원' },
-      { label: '에피소드 책임구조', value: 'ACO', unit: '', basis: 'v3.8 기본값(θ×1.00). FFS·TEAM·MA로 바꾸려면 VBC 금액을 다시 넣는다', validFrom: '2026.01.01', scope: '병원' },
+      { label: '에피소드 책임구조', value: 'ACO', unit: '', basis: '프리셋 12개 = tier 3 × 책임구조 4(순수 FFS·ACO·TEAM 의무·MA 위험분담). 구조는 VBC 금액(TM shared savings × θ 배수)만 바꾼다. 병원 기본값은 ACO', validFrom: '2026.01.01', scope: '병원' },
       { label: 'Loop 귀속률 α', value: '0.35', unit: '', basis: 'v3.8 G15 — 파일럿 attribution 실측 전 가정', validFrom: '2026.01.01', scope: '병원' },
       { label: 'RCM', value: 'Part A × 1%', unit: '', basis: 'gross charges가 0이라 Part A $130M × tier 요율(0.5/1.0/1.8%)로 계산한다', validFrom: '2026.01.01', scope: '병원' },
       { label: '원가 절감·VBC·RCM 금액', value: 'v3.8', unit: '', basis: 'v3.8 tier별 연도 계산값을 연도별 직접 입력으로 고정 — payer mix·레버를 바꿔도 따라 움직이지 않음', validFrom: '2026.01.01', scope: '병원' },
@@ -450,11 +457,7 @@ const SCENARIO_SEED = {
     { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-11-05 10:05' },
     { id: 's3', name: '공격 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-11-05 10:10' },
   ],
-  grmc: [
-    { id: 's1', name: 'Loop 도입 기본안', desc: 'v3.8 기본 tier · ACO · IRS+', preset: 'base', version: 1, updatedAt: '2026-11-05 10:00' },
-    { id: 's2', name: '보수 시나리오', desc: '', preset: 'low', version: 1, updatedAt: '2026-11-05 10:05' },
-    { id: 's3', name: '공격 시나리오', desc: '', preset: 'high', version: 1, updatedAt: '2026-11-05 10:10' },
-  ],
+  grmc: GRMC_PRESETS.map((p, i) => ({ id: `s${i + 1}`, name: p.name, desc: p.desc, preset: p.key, version: 1, updatedAt: '2026-11-05 10:00' })),
 };
 
 /* ---------- 시안 저장 — 병원 기초정보에서 바꾼 값을 시뮬레이터가 읽게 한다 ---------- */
@@ -466,7 +469,7 @@ function loadHospitals() {
   const s = readStore();
   return HOSPITAL_SEED.map(h => {
     const c = structuredClone(h);
-    if (s[h.id]?.presets) c.presets = s[h.id].presets;
+    if (s[h.id]?.presets) c.presets = [...s[h.id].presets, ...h.presets.filter(x => !s[h.id].presets.some(p => p.key === x.key))];
     ['revenueItems', 'profile', 'params', 'sites', 'allocation', 'defaults'].forEach(k => { if (s[h.id]?.[k]) c[k] = s[h.id][k]; });
     /* 저장본을 시드에 맞춘다 — 시드에서 빠진 항목(저장본에만 남은 템플릿 항목·구분)은 버리고, 새로 생긴 항목은 더한다.
        그대로 두면 시드에 없는 템플릿 항목의 모델 값이 없어 계산이 NaN이 되고, 새 항목은 화면에 나오지 않는다. 사용자가 직접 추가한 항목(custom)은 둔다 */
